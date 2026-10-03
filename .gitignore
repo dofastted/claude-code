@@ -1,0 +1,27 @@
+# Dependencies and generated build output
+**/node_modules
+**/target/
+**/dist/
+**/__pycache__/
+*.pyc
+*.tsbuildinfo
+
+# Local scratch and credentials
+.tmp/
+.tmp-*
+*.bak*
+*.log
+*.key
+.env
+.env.*
+!.env.example
+**/credentials.json
+**/.credentials.json
+**/codex-credentials.json
+
+# Editor and agent state
+.vscode/
+.idea/
+.claude/
+.codex/
+*.swp
