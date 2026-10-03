@@ -177,6 +177,10 @@ python3 ~/.codex/skills/ssh-skill/scripts/ssh_execute.py hostdzire --timeout 240
 
 回滚：`sh skills/hostdzire-version-switch/scripts/remote-rollback.sh <BAK>`。1.3.78 的备份是 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.78-20260928T193705Z`；1.3.90 的是 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.90-20261001T124304Z`；1.3.91 的是 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.91-20261001T195651Z`。回滚会再重启一次 Node。
 
+2026-10-03 1.3.96：线上原来是 1.3.94。备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.96-20261003T064641Z`，里面另存了 `VERSION-before`（1.3.94）。kernel、cli-node、cc-node、codex-kernel 的 hash 和线上一致，所以没做 wrap-cli/sync。`kin-worker` 换成 1.3.95 的 `f310d647…`，`kin-oauth-auth` 换成 `f24e99fe…`。
+
+**worker 重载不要用 `POST /api/panel/vms/fleet-update {"action":"reload"}`**。`reloadSlotWorker` 发现宿主机上没有 `run/worker.sock`（wrap/kernel 槽都没有）时，会走 `startVmRuntime(recreate:true)`，这等于 docker rm 再重建：这次 7 个槽（vm-01、03、05、10、13 和两个 `*-3hicloudcom`/`*-3gicloudcom`）容器 ID 全变了。挂载、`unless-stopped`、egress 网络、`--user` 都由 vm.json 重建，没有异常，pong 正常。要保住容器 ID，直接对每个槽 `docker restart kin-<id>`。kin-worker 是单文件 bind mount，`mv` 换文件后不重启，容器里看到的还是旧 inode。
+
 `remote-apply.sh` 不处理 `package*.json` / `node_modules`。新增依赖时（如 1.3.90 的 `https-proxy-agent`）要在 apply 之前先装好，否则重启后 Node 起不来：把新 `package*.json` 传到 `/opt/kin-gateway/.npm-stage-<VERSION>/`，在里面 `npm ci --omit=dev`，再把旧 `node_modules` 和 `package*.json` 挪进 `.deps-bak-vm2api-<旧版本>-<UTC>/`、换上新的，然后跑 `remote-apply.sh`（只重启这一次）。1.3.90 的依赖备份是 `/opt/kin-gateway/.deps-bak-vm2api-1.3.89-20261001T124303Z`；回滚代码不必还原依赖（新依赖是超集）。
 
 上线后核对：`/health` 的 `service` 是 `vm2api`；首页有 `<title>vm2api</title>` 和 `id="root"`；面板登录后 `GET /api/panel/vms`；`POST /v1/messages` 用 `claude-haiku-4-5`、`max_tokens` 32，正文 `Reply with the single word pong.`；`kin-*` 容器 ID 不变且仍是 Up。密钥从 systemd `Environment=` 读，不要打印。
