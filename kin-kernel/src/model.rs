@@ -498,6 +498,19 @@ mod tests {
     }
 
     #[test]
+    fn safeguards_survive_message_request_roundtrip() {
+        let raw = serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "hi"}],
+            "safeguards": {"actions": [{"tool_use_id": "toolu_1"}]}
+        });
+        let parsed: MessageRequest = serde_json::from_value(raw).unwrap();
+        let out = serde_json::to_value(parsed).unwrap();
+        assert_eq!(out["safeguards"]["actions"][0]["tool_use_id"], "toolu_1");
+    }
+
+    #[test]
     fn server_tool_omits_default_input_schema() {
         let request: MessageRequest = serde_json::from_value(serde_json::json!({
             "model": "claude-sonnet-5",

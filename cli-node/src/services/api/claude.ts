@@ -38,7 +38,7 @@ import {
   readPanelCacheTtl,
   resolveKinCacheTtl,
 } from '../../kin/cacheTtl.js'
-import { mergeOfficialExtraBetas } from '../../kin/officialBetas.js'
+import { mergeOfficialExtraBetas, withServerSafeguardBeta } from '../../kin/officialBetas.js'
 import { isKinQuerySource } from '../../kin/querySource.js'
 import {
   billingFromSystemPrompt,
@@ -739,6 +739,8 @@ export type Options = {
   /** Kin cli-hop: raw failure before it is flattened into an assistant error message. */
   onError?: (error: unknown) => void
   wireMessages?: unknown
+  /** Caller server-side auto mode review. Absent on ordinary hops. */
+  safeguards?: unknown
   outputConfigOverride?: BetaOutputConfig
   contextManagementOverride?: unknown
   topP?: number
@@ -844,6 +846,7 @@ export async function* queryKinMessagesWithStreaming({
   signal,
   wireMessages,
   outputConfig,
+  safeguards,
   contextManagement,
   onResponseHeaders,
   onError,
@@ -865,6 +868,7 @@ export async function* queryKinMessagesWithStreaming({
   signal: AbortSignal
   wireMessages?: unknown
   outputConfig?: Record<string, unknown>
+  safeguards?: unknown
   contextManagement?: unknown
   onResponseHeaders?: (headers: globalThis.Headers) => void
   onError?: (error: unknown) => void
@@ -903,6 +907,7 @@ export async function* queryKinMessagesWithStreaming({
       agents: [],
       mcpTools: [],
       wireMessages,
+      safeguards,
       outputConfigOverride: outputConfig as BetaOutputConfig | undefined,
       contextManagementOverride: contextManagement,
       honorCallerThinking: true,
@@ -1909,7 +1914,10 @@ async function* queryModel(
       ? (options.temperatureOverride ?? (options.requestContext ? undefined : 1))
       : undefined
 
-    const presentBetas = betasParams.filter(Boolean)
+    const presentBetas = withServerSafeguardBeta(
+      betasParams.filter(Boolean),
+      options.safeguards != null,
+    )
     const filteredBetas = isKinQuerySource(options.querySource)
       ? mergeOfficialExtraBetas(presentBetas)
       : presentBetas
@@ -1961,6 +1969,7 @@ async function* queryModel(
           context_management: contextManagement,
         }),
       ...extraBodyParams,
+      ...(options.safeguards != null ? { safeguards: options.safeguards } : {}),
       ...(Object.keys(outputConfig).length > 0 && {
         output_config: outputConfig,
       }),

@@ -33,6 +33,14 @@ export const KIN_OFFICIAL_EXTRA_BETAS = [
   'cache-diagnosis-2026-04-07',
 ] as const
 
+/** Server-side auto mode review. Never part of the default mimicry list. */
+export const AFK_MODE_SERVER_BETA = 'afk-mode-2026-01-31'
+
+export function withServerSafeguardBeta(betas: string[], enabled: boolean): string[] {
+  if (!enabled || betas.includes(AFK_MODE_SERVER_BETA)) return betas
+  return [...betas, AFK_MODE_SERVER_BETA]
+}
+
 export function mergeOfficialExtraBetas(betas: string[]): string[] {
   const have = [...betas]
   for (const beta of KIN_OFFICIAL_EXTRA_BETAS) {

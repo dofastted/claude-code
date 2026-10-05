@@ -317,6 +317,7 @@ async function runJob(
 				: undefined,
 			outputConfig,
 			contextManagement: request.context_management,
+			safeguards: request.safeguards,
 			onResponseHeaders: (headers) => {
 				rateLimitHeaders = pickRateLimitHeaders(headers);
 			},

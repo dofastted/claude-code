@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test'
 import {
+  AFK_MODE_SERVER_BETA,
   KIN_OFFICIAL_EXTRA_BETAS,
   KIN_OFFICIAL_MESSAGE_BETAS,
   mergeOfficialExtraBetas,
+  withServerSafeguardBeta,
 } from './officialBetas.ts'
 
 test('official message betas match the 2.1.280 sdk-cli capture', () => {
@@ -58,4 +60,15 @@ test('mergeOfficialExtraBetas keeps advanced-tool-use beside thinking-binding-co
   expect(advanced).toBeGreaterThan(-1)
   expect(clearAt).toBe(advanced + 1)
   expect(binding).toBeGreaterThan(clearAt)
+})
+
+test('server safeguard beta is not in the default list and is appended once', () => {
+  expect(KIN_OFFICIAL_MESSAGE_BETAS).not.toContain(AFK_MODE_SERVER_BETA)
+  expect(KIN_OFFICIAL_EXTRA_BETAS).not.toContain(AFK_MODE_SERVER_BETA)
+  const plain = mergeOfficialExtraBetas(['claude-code-20250219'])
+  expect(plain).not.toContain(AFK_MODE_SERVER_BETA)
+  const merged = mergeOfficialExtraBetas(withServerSafeguardBeta(['claude-code-20250219'], true))
+  expect(merged.at(-1)).toBe(AFK_MODE_SERVER_BETA)
+  expect(merged.filter((beta) => beta === AFK_MODE_SERVER_BETA)).toHaveLength(1)
+  expect(withServerSafeguardBeta(['claude-code-20250219'], false)).toEqual(['claude-code-20250219'])
 })
