@@ -1,6 +1,6 @@
 # 本地二进制与部署
 
-只留在本机。不要在父仓库 `git add local-src/`，不要打进 release，不要放进 HostDzire overlay 以外的源码包。
+只留在本机。不要在父仓库 `git add local-src/`，不要打进 release，不要放进 Netcup overlay 以外的源码包。
 
 `AGENTS.md` 只指向本文件。
 
@@ -10,14 +10,14 @@
 
 | 产物 | 路径 | 是否入库 |
 |---|---|---|
-| 换票 | `bin/kin-oauth-auth` | 是，只提交 ELF |
-| Rust kernel | `bin/kin-kernel` | 是，只提交 ELF |
-| 槽内 kernel 副本 | `share/wrap-cli/kin-kernel.bin` | 是 |
-| crag kernel | `share/crag/kin-kernel` | 是。单独源码树不在下面三处 |
+| 换票 | `bin/oauth-auth` | 是，只提交 ELF |
+| Rust kernel | `bin/kernel` | 是，只提交 ELF |
+| 槽内 kernel 副本 | `share/wrap-cli/kernel.bin` | 是 |
+| crag kernel | `share/crag/kernel` | 是。单独源码树不在下面三处 |
 | cli-node | `share/wrap-cli/cli-node` | 是，只提交 ELF |
 | cc-node | `share/wrap-cli/cc-node` | 是 |
-| Codex kernel | `bin/kin-codex-kernel` | 是。源码不在本目录 |
-| Go worker / egress | `bin/kin-worker`、`bin/kin-egress` | 是。源码在已入库的 `worker/`，release workflow 现编 |
+| Codex kernel | `bin/codex-kernel` | 是。源码在 `.local/codex-kernel/`（父仓库忽略） |
+| Go worker / egress | `bin/worker`、`bin/egress` | 是。源码在已入库的 `worker/`，release workflow 现编 |
 
 `bin/*` 默认忽略，上面这几个 ELF 由 `.gitignore` 的 `!` 放行。
 
@@ -27,15 +27,16 @@
 
 | 二进制 | 源码 | 说明 |
 |---|---|---|
-| `bin/kin-oauth-auth` | `local-src/oauth-auth/` | 编译输入是 `service-entry.cjs`。`service-entry.mjs` 是入口草稿。`src/lib/oauth/auth.js` 仍单独忽略，当前工作区没有这份文件 |
-| `bin/kin-kernel` | `local-src/kin-kernel/` | Rust 2024 / 1.98。`cargo build --release` 的缓存位于本树 `target/`；旧 `crates/kin-kernel/target` 已于 2026-10-03 清理 |
+| `bin/oauth-auth` | `local-src/oauth-auth/` | 编译输入是 `service-entry.cjs`。`service-entry.mjs` 是入口草稿。`src/lib/oauth/auth.js` 仍单独忽略，当前工作区没有这份文件 |
+| `bin/kernel` | `local-src/kin-kernel/` | Rust 2024 / 1.98。`cargo build --release` 的缓存位于本树 `target/`；旧 `crates/kin-kernel/target` 已于 2026-10-03 清理 |
 | `share/wrap-cli/cli-node` | `local-src/cli-node/` | 唯一工作树，版本 2.1.284。`X:\project\kin-kernel-20slot\claude-code` 是旧来源，不要改那份 |
+| `bin/codex-kernel` | `.local/codex-kernel/` | 从 `X:\kin\kin-gateway\codex-kernel` 迁入，独立本地 git。父仓库 `.gitignore` 的 `.local/` 忽略整树。`cargo test` / `cargo build --release` 缓存在该树 `target/`。协议对齐 `X:\workspace\codex-proxy-rs`（`fast`→`priority`、`x-codex-routing-hint`、envelope 头）；SOCKS5/`socks5h` 保留 |
 
 旧路径 `crates/kin-kernel`、`patches/claude-code`、`.local/oauth-auth-build` 的源码已迁走。`.local/cookie-auth-build` 是旧的 cookie 工具，不是现在的换票；2026-10-03 清理了二进制、`build/`、`dist/` 和 Python 缓存，保留源码与 `.spec` 构建说明。
 
 ## 临时文件与测试
 
-2026-10-03 清理了根目录 `.tmp/`（含 1.3.2–1.3.4 部署包及旧解包目录）、7 个 `.tmp-*` 调试脚本、`.tmp-replay/hostdzire-2026-09-22/` 一次性回放数据，以及旧 Rust / cookie 工具构建产物。`docs/benchmarks.zip` 与 `docs/benchmarks/` 逐文件字节相同，仅删除 zip 副本。
+2026-10-03 清理了根目录 `.tmp/`（含 1.3.2–1.3.4 部署包及旧解包目录）、7 个 `.tmp-*` 调试脚本、`.tmp-replay/当时的生产机-2026-09-22/` 一次性回放数据，以及旧 Rust / cookie 工具构建产物。`docs/benchmarks.zip` 与 `docs/benchmarks/` 逐文件字节相同，仅删除 zip 副本。
 
 正式测试保留：Node `test/unit/`、`test/e2e/`、`test/fixtures/`，前端 `web/src/**/*.test.ts`，Go `worker/` 与 `api-kernel/`，以及本地 CLI / Rust 源码内的测试。Node fixtures 仍被 `acceptance.test.mjs` 引用；`docs/benchmarks/` 是文档引用的题库与结果归档。文件日期、旧版本号和 `test` 命名不作为删除依据。
 
@@ -49,13 +50,13 @@
 sh local-src/oauth-auth/build.sh
 ```
 
-`npx pkg service-entry.cjs --targets node18-linux-x64`，输出 `bin/kin-oauth-auth`。
+`npx pkg service-entry.cjs --targets node18-linux-x64`，输出 `bin/oauth-auth`。
 
 整文件 UPX 会坏：pkg 按绝对 `PAYLOAD_POSITION` 读尾部，压缩后偏移对不上，运行是 `Pkg: Error reading from file.`
 
 可用的压法：
 
-1. 留下未压缩 ELF。当前 plain 备份如果还在，是 `/tmp/kin-oauth-auth.plain`。
+1. 留下未压缩 ELF。当前 plain 备份如果还在，是 `/tmp/oauth-auth.plain`。
 2. 在 section table 结束处切开（等于 `PAYLOAD_POSITION`）。node18 底包不变时切点是 **46205192**。
 3. 把 ELF 里 22 字符的 `PAYLOAD_POSITION` / `PRELUDE_POSITION` 改到固定垫片 **13250000**，以及 `13250000 + PAYLOAD_SIZE`。`PAYLOAD_SIZE` / `PRELUDE_SIZE` 每次构建都会差几个字节（pkg 产物不可复现），以本次 plain 为准。
 4. 只压前半：`upx --best --lzma`。
@@ -71,24 +72,37 @@ sh local-src/oauth-auth/build.sh
 
 拆分提交：main `1bc508d` 只带 `CLAUDE_WEB` 修复。构建时临时去掉 bundle 里 px-local 的 `if (proxyUrl === "") return "";`，在 `/tmp` 下用 pkg 构建。`PAYLOAD_SIZE=1107860`、`PRELUDE_SIZE=74374`，UPX 前半 13104916 字节，结果 **14432234** 字节，SHA256 `2167d3b1964c7d1f29075941563b7febd343109d01cfe105020291d4a3a93aa8`。这个构建里 `""` 仍回 `proxy_required`。PR #216（`fix/px-local-oauth-direct`）用的是上面 **14432262** 那份（px-local + `CLAUDE_WEB`）。当前 `service-entry.cjs` 两处改动都在。
 
+2026-10-04 Cookie authorize 400：`service-entry.cjs` 的 authorize JSON 补 `organization_uuid: org`。经 vm-14 同一 SOCKS5 对照假 sessionKey：缺字段 400 `Invalid request format`，补字段 403 `Invalid authorization`，platform/claude.ai 两域一致；保留原 platform endpoint，不增加重试。`PAYLOAD_SIZE=1107895`、`PRELUDE_SIZE=74383`，UPX 5.0.2 前半 13106436 字节，产物 **14432278** 字节，SHA256 `1029f5d198e41582ed23d12430cae49e10d05a5bc47db49be37b558c033defeb`。真实 ELF + 本地 SOCKS/TLS authorize 回归从 400 红转绿；当时的生产机 同一 ELF 的对应 fixture 1/1 通过。未取得真实有效 sessionKey，不能等同于真实账号换票成功。
+
 坏操作必须退出 1，正文是 `invalid_operation`。不要用 `subprocess.check_output` 去探它。
 
 ```sh
-printf '%s' '{"operation":"nope"}' | bin/kin-oauth-auth; echo exit:$?
+printf '%s' '{"operation":"nope"}' | bin/oauth-auth; echo exit:$?
 ```
 
 ### kernel
 
-源码树里没有 UPX 步骤。现网 `bin/kin-kernel` 是普通动态 ELF，未 strip，也不是 UPX。
+源码树里没有 UPX 步骤。现网 `bin/kernel` 是普通动态 ELF，未 strip，也不是 UPX。
 
 ```sh
 cd local-src/kin-kernel
 cargo build --release
-install -m 755 target/release/kin-kernel ../../bin/kin-kernel
-install -m 755 target/release/kin-kernel ../../share/wrap-cli/kin-kernel.bin
+install -m 755 target/release/kernel ../../bin/kernel
+install -m 755 target/release/kernel ../../share/wrap-cli/kernel.bin
 ```
 
 Rust 1.98。不要把 `target/` 或 `src/` 提交。
+
+### Codex kernel
+
+```sh
+cd .local/codex-kernel
+cargo test
+cargo build --release
+install -m 755 target/release/codex-kernel ../../bin/codex-kernel
+```
+
+不要把 `.local/` 或 `target/` 提交进父仓库。换 ELF 后重启 Codex 槽的宿主 kernel 进程（Node 子进程），不要 `docker rm`。
 
 ### cli-node
 
@@ -103,9 +117,9 @@ bun run scripts/compile-cli-node.ts dist/cli-node
 
 2026-10-01 未发布的 #191 修复在 `services/api/claude.ts` 的 `message_delta` 分支：`isKinQuerySource(options.querySource)` 时不生成交互式 `max_output_tokens` 错误，正常转发上游终结帧。重编后用 `/tmp/upx-5.0.2-amd64_linux/upx --best --lzma <新 ELF>` 压缩，再 `install -m 755 <新 ELF> share/wrap-cli/cli-node`。本次产物 27162364 字节，SHA256 `75a1a7b939553a5deeea98075359a87a2d4132535f71e29ef88df291e79ea55d`。真实 kernel + 此 CLI 的流式 / 非流式本地 SSE fixture 均保留 `max_tokens`、内容和 usage；不等于真实 Anthropic 账号或线上验证。
 
-2026-10-02 取消 / 恢复修复，已发布为 1.3.91（`6a32923` / tag `v1.3.91`）并部署 HostDzire：native cancel 不阻塞共享 reader，匹配 ack 前不复用 slot；早到取消与完整 JSONL 提交有竞态保护；真实错误跨层保留；CLI / 容器分别限次恢复，预算耗尽停调度并通知。native 一 job 一上游执行，不进入交互式 retry / non-streaming fallback；SDK 0.39 SSE 错误从其 decoder cause 恢复原始字段，本地异常与真正断流分开。
+2026-10-02 取消 / 恢复修复，已发布为 1.3.91（`6a32923` / tag `v1.3.91`）并部署 当时的生产机：native cancel 不阻塞共享 reader，匹配 ack 前不复用 slot；早到取消与完整 JSONL 提交有竞态保护；真实错误跨层保留；CLI / 容器分别限次恢复，预算耗尽停调度并通知。native 一 job 一上游执行，不进入交互式 retry / non-streaming fallback；SDK 0.39 SSE 错误从其 decoder cause 恢复原始字段，本地异常与真正断流分开。
 
-- `bin/kin-kernel` 与 `share/wrap-cli/kin-kernel.bin`：SHA256 `7916d51e121b07553fd858f92151912ca9878f6ef25aa776f7fd60d7132704df`。
+- `bin/kernel` 与 `share/wrap-cli/kernel.bin`：SHA256 `7916d51e121b07553fd858f92151912ca9878f6ef25aa776f7fd60d7132704df`。
 - `share/wrap-cli/cli-node`：UPX `--best --lzma`，27164016 字节，SHA256 `a32241fb000f9696f846efcc32ab72d07714465edbc16fe914b33f62d65c83cc`。
 - `cargo test --release` 108 passed / 1 ignored；CLI classifier / stale-connection 7 passed / 32 assertions；Node 全量 unit 完成且无失败。真实 ELF + 本地 SSE fixture 验证取消关闭上游 / 恢复 slots、真实 400 与 retry-after、断流、CLI kill 后自动 respawn 与后续 pong。2026-10-02 上线后 `POST /v1/messages` haiku 返回 `pong`。备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.91-20261001T195651Z`。
 
@@ -120,7 +134,7 @@ bun run scripts/compile-cli-node.ts dist/cli-node
 | 当前本机产物 | 字节 | SHA256 |
 |---|---:|---|
 | share/wrap-cli/cli-node | 27164424 | c711a9660d59fd1833e207a34782331f3b65d5d7a0f644880bb26e77e15d7ff1 |
-| bin/kin-kernel、share/wrap-cli/kin-kernel.bin | 各12848504 | fccd1a3564c9d24175aeaff1d12ccf3aca31e64cf45d954804df2ced4c45f610 |
+| bin/kernel、share/wrap-cli/kernel.bin | 各12848504 | fccd1a3564c9d24175aeaff1d12ccf3aca31e64cf45d954804df2ced4c45f610 |
 
 CLI 编译 stubbed 0 missing modules，plain 111151232 字节，使用 UPX 5.0.2 `--best --lzma` 压缩。Rust `cargo test --release` 110 passed/1 ignored，release 构建成功（既有 continuation_ttl_secs warning）；Bun native 6文件36 passed/105 assertions；Node unit 181文件2092 passed/9 skipped/0 failed。暂存plain/compressed分别验证，最终交付ELF分类+max_tokens e2e 11 passed，包含真实旧CLI组合。
 
@@ -130,15 +144,40 @@ CLI 全量 typecheck 改前/最终各7287个错误，去掉行号后按错误mul
 
 ```sh
 install -m 755 /tmp/vm2api-automode-original-20261003/cli-node share/wrap-cli/cli-node
-install -m 755 /tmp/vm2api-automode-original-20261003/kin-kernel bin/kin-kernel
-install -m 755 /tmp/vm2api-automode-original-20261003/kin-kernel share/wrap-cli/kin-kernel.bin
+install -m 755 /tmp/vm2api-automode-original-20261003/kin-kernel bin/kernel
+install -m 755 /tmp/vm2api-automode-original-20261003/kin-kernel share/wrap-cli/kernel.bin
 ```
 
 完整回滚还须只撤回本任务Node变更；不能整体恢复共享脏工作区。单独回退ELF时新Node会明确拒绝分类用途。私有源码/target/dist仍不入库。
 
-2026-10-03 后续用户授权 **HostDzire 最小包热更新**：只应用本任务10个Node文件和3份ELF，版本保留远端1.3.92；Node重启一次，6个Claude wrap槽位最终健康、classifier_request_context=true、payload hash与上表一致，容器ID不变，Codex槽位未处理。备份 `/opt/kin-gateway/.deploy-bak-auto-mode-20261002T195539Z`，是最小补丁布局，不直接用于完整overlay的remote-rollback.sh；回滚按manifest只恢复本任务文件，再同步6槽位旧payload。
+2026-10-03 后续用户授权 **当时的生产机 最小包热更新**：只应用本任务10个Node文件和3份ELF，版本保留远端1.3.92；Node重启一次，6个Claude wrap槽位最终健康、classifier_request_context=true、payload hash与上表一致，容器ID不变，Codex槽位未处理。备份 `/opt/kin-gateway/.deploy-bak-auto-mode-20261002T195539Z`，是最小补丁布局，不直接用于完整overlay的remote-rollback.sh；回滚按manifest只恢复本任务文件，再同步6槽位旧payload。
 
-Windows Claude2.1.285、opus-5-5、auto的单次真实-p对话，通过临时SSH隧道连接HostDzire8787入口（公网预检Cloudflare403）。auto模式可进入，但主会话遭503 pool_unavailable；SDK3次自动重试的网关日志均attempt_count=0，没有工具/分类请求。5个账户额度安全线，vm-05会话并发上限；未放宽这些限制。临时配置/原始日志和隧道已清理，未修改用户持久endpoint；未提交发布。记录在 `.trellis/tasks/10-03-auto-mode-adaptation/research/hostdzire.md`，A18仍PENDING。
+Windows Claude2.1.285、opus-5-5、auto的单次真实-p对话，通过临时SSH隧道连接当时的生产机8787入口（公网预检Cloudflare403）。auto模式可进入，但主会话遭503 pool_unavailable；SDK3次自动重试的网关日志均attempt_count=0，没有工具/分类请求。5个账户额度安全线，vm-05会话并发上限；未放宽这些限制。临时配置/原始日志和隧道已清理，未修改用户持久endpoint；未提交发布。记录在 `.trellis/tasks/10-03-auto-mode-adaptation/research/当时的生产机.md`，A18仍PENDING。
+
+2026-10-03 #220 `<severity>` 分类适配（分支 `fix/auto-mode-severity-classifier`，未提交）：kernel `provider/mod.rs` 与 cli-node `kin/classifierRequest.ts` 的 xml 一致性校验去掉 system 含 `<block>` 的要求，只看无 `tool_choice` + messages 含 `<transcript>`。改前本机 ELF 即上表 c711a96… / fccd1a3…；新 Node + 旧 ELF 的 severity 分类实测 400 `invalid_request_context`。
+
+| 当前本机产物 | 字节 | SHA256 |
+|---|---:|---|
+| share/wrap-cli/cli-node（UPX 5.0.2 `--best --lzma`，plain 111151232 / `9f0d8645a30184480f2b1afc095787c917d857e9e97705036cf4634db887afee`） | 27164296 | 72714299db914432158d7832a3c4fb9aef2e481d444b8a3ff49b8c0f603101dd |
+| bin/kernel、share/wrap-cli/kernel.bin | 各12848544 | f9347e29f616ad98e162c2f382745233a7881745e2031965d675a4ffa14fcf6c |
+
+`cargo test --release` 110 passed/1 ignored；Bun `classifierRequest.test.ts` 2 passed；交付 ELF 下 `auto-mode.e2e` + `cli-hop-max-tokens.e2e` 10 passed/1 skipped（旧 CLI 组合需 `KIN_AUTOMODE_OLD_CLI`，暂存产物阶段已跑通 4/4）。本地 fixture，未经真实 Anthropic / 真实 2.1.283 客户端验证。
+
+2026-10-04 单一换票者（未提交）：cli-node `utils/auth.ts` 在 `CLAUDE_CODE_KIN_HOST_REFRESH=1` 时，临期 / 401 强制刷新只重读磁盘凭证，不请求 token 端点、不写回；kernel `multiplex_cli/supervisor.rs` 给拉起的 CLI 固定设置该变量，面板运维终端 rc 同样导出。在上表 #220 产物源码之上构建，未改其它逻辑。
+
+| 当前本机产物 | 字节 | SHA256 |
+|---|---:|---|
+| share/wrap-cli/cli-node（UPX 5.0.2 `--best --lzma`，plain 111151232 / `d5d80de5bb506e17f1eb509966e3c0daa109ead0d3160d61041295c29ce4904c`） | 27164352 | 7b23385e502b5158f4d73cb8444b4aca0a171076d255a34a4d8379c28ef494ce |
+| bin/kernel、share/wrap-cli/kernel.bin | 各12848256 | 6ec05f35429e6fac69d3e940070c939d2f67e2b6b741b5bb862a784194d9486a |
+
+`cargo test --release` 110 passed/1 ignored；交付 ELF 下 `credential-rotation.e2e` + `auto-mode.e2e` + `cli-hop-max-tokens.e2e` 12 passed/1 skipped（需 `env -u CI`，否则 CLI 走 CI 仅环境变量鉴权）。本地 mock token 端点：同一 plain CLI 不设变量时与 kin-worker 并发重复使用 rt-0；设变量后只有 kin-worker 换票，`kinGeneration`/email 保留。kernel 拉起的 CLI 进程 environ 实测含该变量。未经真实 Anthropic 验证。
+
+2026-10-05 服务端 auto mode 审查透传（未发布）：只在主请求带 `safeguards` 时，cli-node 把该字段放进上游 Messages，并只给这一次追加 `afk-mode-2026-01-31`。默认 beta 列表不变。kernel 生产代码未改，`MessageRequest.extra` 本来就会留下该字段，所以没有重编 `bin/kernel` / `share/wrap-cli/kernel.bin`（仍是 `6ec05f35…`）。Node 单测 `server-safeguards.test.mjs` 3 passed；Bun `officialBetas.test.ts` 5 passed；`cargo test --release safeguards_survive` 1 passed。未经真实 Anthropic 账号验证。
+
+| 当前本机产物 | 字节 | SHA256 |
+|---|---:|---|
+| share/wrap-cli/cli-node（UPX 5.0.1 `--best --lzma`，本机没有 5.0.2；plain 111159424 / `b8ec0e1515c155864ca92d5fc3dfb25b9e0d812b3fb08838ea69a2bcd1856e46`） | 27165568 | d4f6c0c286c5a30c8432a84d06b2f26991a5eb1a7d3d2628599ff860748722a5 |
+
 
 ## GitHub Release
 
@@ -153,31 +192,49 @@ Windows Claude2.1.285、opus-5-5、auto的单次真实-p对话，通过临时SSH
 
 `gh` 走 `ALL_PROXY=socks5h://127.0.0.1:10808`，先去掉别的 HTTP(S)/ALL_PROXY。Git 用 Windows `git.exe`。
 
-## HostDzire
+## 部署
 
-只走本机 `skills/hostdzire-version-switch` 和 `~/.codex/skills/ssh-skill`。`skills/` 不入库。SSH 是：
+主力服务器只有 Netcup。SSH 别名 `netcup`，地址和公网入口只写在 `skills/version-switch/host.env`（`VM2API_SSH_HOST`、`VM2API_PUBLIC_URL`）。不要再连接、部署或启动其他旧生产机。不要把别名、地址或厂商写进技能正文、提交、PR 或公开文档。Release 发布之后把版本、备份路径、是否 sync 和验证结果补进本文件。
+
+只走本机 `skills/version-switch` 和 `~/.codex/skills/ssh-skill`。`skills/` 不入库。先加载配置再 SSH：
 
 ```sh
-python3 ~/.codex/skills/ssh-skill/scripts/ssh_execute.py hostdzire "<cmd>"
-python3 ~/.codex/skills/ssh-skill/scripts/ssh_upload.py hostdzire "<local>" "<remote>"
+set -a
+. skills/version-switch/host.env
+set +a
+python3 ~/.codex/skills/ssh-skill/scripts/ssh_execute.py "$VM2API_SSH_HOST" "<cmd>"
+python3 ~/.codex/skills/ssh-skill/scripts/ssh_upload.py "$VM2API_SSH_HOST" "<local>" "<remote>"
 ```
 
-别名 `hostdzire`，`23.80.83.15`，树在 `/opt/kin-gateway`，页面 `https://kin.fkcodex.com`。不要改成 `/opt/vm2api`。
+树在 `/opt/kin-gateway`。不要改成 `/opt/vm2api`。
 
 ```sh
-sh skills/hostdzire-version-switch/scripts/pack-overlay.sh
-python3 ~/.codex/skills/ssh-skill/scripts/ssh_upload.py hostdzire /tmp/vm2api-hostdzire-<VERSION>.tgz /tmp/vm2api-hostdzire-<VERSION>.tgz
-python3 ~/.codex/skills/ssh-skill/scripts/ssh_upload.py hostdzire skills/hostdzire-version-switch/scripts/remote-apply.sh /tmp/vm2api-remote-apply.sh
-python3 ~/.codex/skills/ssh-skill/scripts/ssh_execute.py hostdzire --timeout 240 "sh /tmp/vm2api-remote-apply.sh <VERSION>"
+sh skills/version-switch/scripts/pack-overlay.sh
+python3 ~/.codex/skills/ssh-skill/scripts/ssh_upload.py "$VM2API_SSH_HOST" /tmp/vm2api-overlay-<VERSION>.tgz /tmp/vm2api-overlay-<VERSION>.tgz
+python3 ~/.codex/skills/ssh-skill/scripts/ssh_upload.py "$VM2API_SSH_HOST" skills/version-switch/scripts/remote-apply.sh /tmp/vm2api-remote-apply.sh
+python3 ~/.codex/skills/ssh-skill/scripts/ssh_execute.py "$VM2API_SSH_HOST" --timeout 240 "sh /tmp/vm2api-remote-apply.sh <VERSION>"
 ```
 
 `remote-apply.sh` 会重启 `kin-gateway` 一次。不要再重启。不要动 `kin-gateway-go`。不要 `docker rm` `kin-*`。不要覆盖 `routing.json`、`vms/`、`data/`、`.env`。
 
-`wrap-cli/sync` 只在 `bin/kin-kernel` 或 `share/wrap-cli/cli-node` 的字节和线上不一致时做。版本号相同不算一致，要比 SHA256。
+`wrap-cli/sync` 只在 `bin/kernel` 或 `share/wrap-cli/cli-node` 的字节和线上不一致时做。版本号相同不算一致，要比 SHA256。
 
-回滚：`sh skills/hostdzire-version-switch/scripts/remote-rollback.sh <BAK>`。1.3.78 的备份是 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.78-20260928T193705Z`；1.3.90 的是 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.90-20261001T124304Z`；1.3.91 的是 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.91-20261001T195651Z`。回滚会再重启一次 Node。
+回滚前先在目标机列出 `/opt/kin-gateway/.deploy-bak-vm2api-*`。上传 `skills/version-switch/scripts/remote-rollback.sh` 到 `/tmp/vm2api-remote-rollback.sh`，再 `sh /tmp/vm2api-remote-rollback.sh [BAK]`。回滚会再重启一次 Node。
+
+2026-10-07 1.3.112 Release（未部署）：合入 PR #261（codex-kernel 结束帧按顶层 type 判断，merge `4df2cb3`）和侧栏版本号不截断（`fcaef37`，含 `web/dist`）。版本提交 / tag `v1.3.112` = `dd0ee27`，Release workflow `37568520284` 四个 job 全成功，10 附件（8 amd64 + 2 arm64）；release asset `kin-codex-kernel` 与仓内一致 `98715a2f…`。正文已用 `gh release edit` 补上 CHANGELOG 1.3.112 段。线上 codex-kernel 已在热修时换成同一哈希；部署 1.3.112 只差 `web/dist` 与 VERSION，Node 重启一次，不要 wrap-cli/sync。
+
+2026-10-07 codex-kernel 热修（VERSION 仍是 1.3.111）：GPT 长输出时客户端收到空回复，日志记 `codex_upstream`、status 200、tokens 0。原因是 `is_terminal_frame` 拿子串匹配整帧，`*.done` 帧的正文里只要出现 `response.completed` 就会被当成结束帧，内核提前断开 ws。改成只看顶层 `type`（completed/incomplete/failed/error）或顶层 `status_code` 429，和 codex-proxy-rs 一致。源码在 `.local/codex-kernel-terminalfix` 分支 `fix/terminal-frame-by-type`（`9aed5e2`），基于干净 HEAD `c92b176`；`.local/codex-kernel` 主工作区还有没提交的改名 WIP（鉴权头改成 `x-internal-token`），不能从那里构建。上线的是 strip 后的 `98715a2f…`，旧版 `4fd6189f…` 备份为 `/opt/vm2api/bin/kin-codex-kernel.bak-terminalfix-20261007T033146Z`。先停掉两个 codex-kernel 进程，再把 Node 重启一次（Node 的 `starts` 表留着旧子进程句柄，只杀进程不重启 Node 的话 vm-01 会一直 503），前门没动。验证：网关 `/v1/responses` 把触发句完整跑到 `response.completed` 并记为 verified，verify-live 有 7 项 PASS（haiku 200 pong），容器 ID 前后对比没变（9 个）。
+
+2026-10-07 1.3.111：线上原来是 1.3.109。备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.111-20261006T220328Z`。PR #260 调度设置已在 main `9561892`。kernel、cli-node、cc-node、codex-kernel、worker、egress、oauth-auth 哈希与线上一致，没做 wrap-cli/sync。Node 重启一次，前门未动。verify-live 全 PASS（10 VM、9/9 容器 ID 不变、haiku 200 pong）。目录仍是 `/opt/kin-gateway`，因为槽位挂载和前门二进制绑在这里；应用本身是 vm2api。
 
 2026-10-03 1.3.96：线上原来是 1.3.94。备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.96-20261003T064641Z`，里面另存了 `VERSION-before`（1.3.94）。kernel、cli-node、cc-node、codex-kernel 的 hash 和线上一致，所以没做 wrap-cli/sync。`kin-worker` 换成 1.3.95 的 `f310d647…`，`kin-oauth-auth` 换成 `f24e99fe…`。
+
+2026-10-03 1.3.97：线上原来是 1.3.96。备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.97-20261003T132037Z`。PR #221 合入后打 tag；kernel `f9347e29…`、cli-node `72714299…` 与 1.3.96 不同，wrap-cli/sync `restart:true` 6/6。worker / oauth-auth 哈希未变，未 docker restart 槽。6 个 Claude wrap 槽 `/internal/health` healthy 且 `classifier_request_context=true`。8 容器 ID 不变。haiku pong 503 `pool_unavailable`（Claude 槽全在额度安全线），未放宽限制、未宣称分类已在真实账号验证。
+
+2026-10-03 1.3.98：线上原来是 1.3.97。备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.98-20261003T144921Z`。PR #222 合入后打 tag。`kin-codex-kernel` `4fd6189f…`（线上原 `cb882a08…`）。kernel `f9347e29…`、cli-node `72714299…` 与 1.3.97 相同，**没做 wrap-cli/sync**。apply 后无残留 `kin-codex-kernel` 进程。8 容器 ID 不变。`/health` `service=vm2api`。haiku pong 503 `overloaded_error`（号池当前没有可用账号），与 1.3.97 同类，未放宽限制。
+
+2026-10-03 1.3.99：线上原来是 1.3.98。备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.99-20261003T151641Z`。PR #223 合入后打 tag。kernel / cli-node / codex-kernel 哈希与 1.3.98 相同（`f9347e29…` / `72714299…` / `4fd6189f…`），**没做 wrap-cli/sync**。8 容器 ID 不变。`/health` `service=vm2api`。`GET /api/panel/vms` 上 `vm-codex-01`（lemeryvorhees）`total_cost=139.87`，用量行 email 已补上；`vm-01` 仍有费用。
+
 
 **worker 重载不要用 `POST /api/panel/vms/fleet-update {"action":"reload"}`**。`reloadSlotWorker` 发现宿主机上没有 `run/worker.sock`（wrap/kernel 槽都没有）时，会走 `startVmRuntime(recreate:true)`，这等于 docker rm 再重建：这次 7 个槽（vm-01、03、05、10、13 和两个 `*-3hicloudcom`/`*-3gicloudcom`）容器 ID 全变了。挂载、`unless-stopped`、egress 网络、`--user` 都由 vm.json 重建，没有异常，pong 正常。要保住容器 ID，直接对每个槽 `docker restart kin-<id>`。kin-worker 是单文件 bind mount，`mv` 换文件后不重启，容器里看到的还是旧 inode。
 
@@ -185,9 +242,43 @@ python3 ~/.codex/skills/ssh-skill/scripts/ssh_execute.py hostdzire --timeout 240
 
 上线后核对：`/health` 的 `service` 是 `vm2api`；首页有 `<title>vm2api</title>` 和 `id="root"`；面板登录后 `GET /api/panel/vms`；`POST /v1/messages` 用 `claude-haiku-4-5`、`max_tokens` 32，正文 `Reply with the single word pong.`；`kin-*` 容器 ID 不变且仍是 Up。密钥从 systemd `Environment=` 读，不要打印。
 
+2026-10-04 1.3.101：用户授权 #224/#226/#227 修复上线，随后授权提交 PR、合并 main 并发布。PR #228 已合并，main/tag 为 `9b3657b65df61bfa52bb801c61646c94fa781d8e`。第一次修复工作区按 1.3.100 上线，备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.100-20261003T174419Z`，`VERSION-before=1.3.99`；因 v1.3.100 已发布，新增修复正式切到 1.3.101，备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.101-20261003T175133Z`，`VERSION-before=1.3.100`。两次版本切换各重启一次 Node；Go 入口未动，kernel/CLI/worker 与原线上一致，未做 wrap-cli/sync 或重启槽容器。
+
+1.3.101 完整 `verify-live.py` gate 退出 0；额度窗口结束后真实 haiku 对话返回 200 `pong`，未放宽额度/冷却规则。385 个部署文件 SHA256 一致，8/8 容器 ID/StartedAt 和 CLI PID/start ticks 不变，13 个出口身份探测通过。PR/main CI 和 Release 工作流成功；[v1.3.101](https://github.com/dofastted/vm2api/releases/tag/v1.3.101) 已正式发布，含 8 个 linux amd64 附件及 GHCR 镜像。详细证据：`.trellis/tasks/10-04-issue-226-227-review/deployment.md`。
+
+2026-10-04 vm-14 换票热修复：仅更新 `src/lib/cluster/remote-fs.mjs`（SHA256 `c459e1d3d4146c8dcb6ecfb258cdd38930e33b55fc32df14c405b9bbbfd6b08f`，字符串转 Buffer）和上面的 `bin/oauth-auth`，VERSION 保留 1.3.101。备份 `/opt/kin-gateway/.deploy-bak-vm14-oauth-20261003T185925Z`，保留这两份原文件、VERSION-before 和容器对照。Node 重启一次，Go 未动；原有 9 个 kin 容器 ID/StartedAt 全不变，未 wrap-cli/sync。vm-14 原无容器，修前 start 500 `buffer is not a Buffer`；修后 start 200，扩展节点新增 kin-14 和 kin-14-egress，kernel `/internal/health` 200、healthy=true、ready_slots=20、credential_state=missing。没有复制 vm-15 票据或写入测试票据。
+
+本次目标单测 33 passed / 7 skipped / 0 failed，Biome 4 文件通过，源文件和 bundle `node --check` 通过。全量 `npm run test:unit` 在 240 秒超时，末尾 `vm-db-sync.test.mjs` cancelled（pending promise），**未完成全量验证**。真实授权码 / Cookie 不保存于失败请求中，需面板新授权才能完成真实换票验证；不要复用重启前的授权 session。
+
+热修复后真实 `/v1/messages` haiku 回 200 `pong`（input/output 各 5 tokens），证明原号池入口正常；不等于尚无票据的 vm-14 已完成真实推理。
+
+用户随后授权提交、PR 与合入 main：修复提交 `bef44329a756a15ba4efd53c8e6493b4dc3f2227`，PR [#229](https://github.com/dofastted/vm2api/pull/229) 已合并，main 为 `c32ed9088d9da329c36eb14967076eeee816a436`。PR CI [37147073729](https://github.com/dofastted/vm2api/actions/runs/37147073729) 与 main CI [37147442726](https://github.com/dofastted/vm2api/actions/runs/37147442726) 的 unit/worker/kernel/web 全部通过；本地全量超时记录仍保留，不等于 CI 失败。现有 main 工作树 `.local/release-1.3.94` 在确认干净后快进同步，根工作树保留本次修复分支。未打 tag、发布版本或再次重启线上；真实账号换票仍待面板有效输入复测。
+
+2026-10-04 1.3.102 正式发布并部署：版本提交 `50b53c5ef688b016da6a09c3912219682df9a7f4`，发布 PR [#230](https://github.com/dofastted/vm2api/pull/230) 已合并，main/tag `v1.3.102` 为 `a3b267c99d3fc9b356ade2bb0e3c858f891db19e`。PR CI `37148471048`、main CI `37148736850`、Release workflow `37148952001` 全部成功；[Release](https://github.com/dofastted/vm2api/releases/tag/v1.3.102) 非 draft / 非 prerelease，8 个 linux amd64 附件及 GHCR `v1.3.102`/`latest` 已发布。下载的 OAuth 附件与仓内 ELF 字节一致，SHA256 `1029f5d198e41582ed23d12430cae49e10d05a5bc47db49be37b558c033defeb`。web 构建首轮 180 秒截止超时，延长单次截止后正常完成，13176 modules；重建产物与已入库 web/dist 一致，无新增前端改动。
+
+当时的生产机 备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.102-20261003T195111Z`，包含完整 overlay 前文件、VERSION-before、容器 ID/StartedAt 前后、前门进程状态及受保护配置哈希。部署包 SHA256 `f029132097098c3565ae2d53b81bca38c9f1a975be5740df40f31c91329cb1a3`（105041144 字节）；线上 385 个对应文件哈希一致。Node 重启一次，Go 前门 PID/启动时间不变；本机 9 个与扩展节点 2 个槽/出口容器合计 11 个 ID/StartedAt 均不变，未 wrap-cli/sync 或重启槽。routing/.env 哈希不变，dl 链接保留；未覆盖 vms/data。
+
+按 当时的生产机 overlay 约定保留与线上一致的仓内 Go 产物：worker `f310d6470bb8e01488ff347ee9b0149ee599a0087cc50b8e2871517a0aa42f61`、egress `3e720a1a36193f1753e801b2e4addefd56624a1e098b71e9c5fefcc91110298f`；本次无 Go 代码改动。Release workflow 重新编译的 Go 附件哈希分别为 `b37f9478e2f116222ee959130fcbca62408738d1e0fdc07b80c04468367df16d`、`eb75ca36856249545c2e4c278265177c490b11d920ee096670fb85bdb4f0e632`，未用它们替换当前槽内 Go 挂载。
+
+完整 verify-live gate 退出 0：VERSION 与面板 1.3.102、Node health 200 vm2api、10 个 VM、首页正常、9/9 本机容器 Up/ID 保留、真实 haiku 200 pong。真实 Chromium 控制台版本文字与 Release 链接为 v1.3.102；截图与实际 DOM 已验证。部署后 vm-14 kernel health 200、healthy=true、ready_slots=20、cli_restarts=0、credential_state=missing；真实账号换票仍须面板有效输入复测，不把健康/fixture 当作已拿票。
+
+2026-10-04 1.3.103 发布并部署：单一换票者（cli-node `CLAUDE_CODE_KIN_HOST_REFRESH`）+ 初装/`setup-token` 改用槽内 cli-node。feat/macos 上的改动在 origin/main 独立工作树 `.local/release-1.3.103`（分支 `fix/single-refresher-cli-node`）手工移植（main 无 guest-account，路径用 `CONTAINER_CLI_NODE_BIN`）。PR [#233](https://github.com/dofastted/vm2api/pull/233) 未等 CI 直接合并，main/tag `v1.3.103` = `e3402ed14cf50dfcde15bba01e84aad8c022a997`；事后 PR/main CI 与 Release workflow `37189975713` 均成功，8 个附件齐。kernel `6ec05f35…`、cli-node `7b23385e…`。
+
+当时的生产机：`scripts/` 不在 overlay 内，先把 `official-cc-resident.py`、`claude-setup-token-pty.py` 备份到 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.103-scripts-20261004T084854Z/` 再替换，`repair-official-cc-bins.mjs` 移入同一目录；随后 remote-apply，备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.103-20261004T084854Z`，Node 重启一次，Go 未动。wrap-cli/sync `restart:true` 返回 7/7 `kernel_restart_failed`（重启后立刻探 `kernel.sock` 尚未出现），实际 7 槽容器 docker restart 后 ID 不变，`/internal/health` 全 healthy、ready_slots=20，内核拉起的 CLI environ 含 `CLAUDE_CODE_KIN_HOST_REFRESH=1`。verify-live 全 PASS（9/9 容器 ID 不变、真实 haiku 200 pong）。vm-01 不在 sync 列表，仍是旧 cli-node `c711a966…`，未处理；扩展节点 vm-14 镜像内二进制未更新。初装 hello 的 cli-node 真实账号路径未验证。
+
+2026-10-04 1.3.104：1.3.103 回归——`cli-node-guard` 只留 PID 最小的 `-p` cli-node，其余 `-p` 一律 SIGKILL，导致初装 hello/`/usage`、`setup-token` 和面板终端 `claude -p` 被杀（用户截图 `Killed`）。改为按 environ 识别（内核 `CLAUDE_CODE_KIN_NATIVE_SLOTS`，豁免 `KIN_OFFICIAL_CC=1`/`KIN_SETUP_TOKEN=1`/活跃 `KIN_PANEL_SHELL`，environ 不可读不动）。PR [#234](https://github.com/dofastted/vm2api/pull/234) 未等 CI 合并，main/tag `v1.3.104` = `021018a78a629f212cce1780969a48545c907ebe`。当时的生产机：`claude-setup-token-pty.py` 先备份到 `.deploy-bak-vm2api-1.3.104-scripts-20261004T091407Z/`，overlay 备份 `.deploy-bak-vm2api-1.3.104-20261004T091407Z`，Node 重启一次，kernel/CLI 未变、未 wrap-cli/sync。kin-13 内带标记的 `-p hello` 与 `setup-token` 假进程存活 35s（>2 个守护周期），内核 CLI pid 13 不变；verify-live 全 PASS（9/9 容器 ID 不变、haiku 200 pong）。
+
+2026-10-05 1.3.105：#239 日志/统计、#235 代理名称（迁移改 028）、#241 首条 user reminder 开头会话碰撞（#236，替代 #237）、#242 API Key 在 HTTP 下复制。发版 PR [#244](https://github.com/dofastted/vm2api/pull/244)，main/tag `v1.3.105` = `9df0d40527fddd18b50fbd673cc8ae56f76884e3`，Release workflow `37222259215` 成功、8 附件齐。打包必须在 tag 的干净工作树里做（`pack-overlay.sh` 取脚本所在仓库根，根工作区在 feat/macos 有未提交改动）：把 `skills/当时的生产机-version-switch` 拷进 tag 工作树再跑；git 里 `share/wrap-cli/cc-node` 是 644，打包前要在该工作树 `chmod 755`（remote-apply 也会 chmod）。包 SHA256 `d46a297f…`（105343844 字节）。kernel `6ec05f35…`、cli-node `7b23385e…`、cc-node、codex-kernel、worker `f310d647…`、egress、oauth-auth、crag、`package*.json` 与线上一致，**没做 wrap-cli/sync、没装依赖**。备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.105-20261004T182145Z`，Node 重启一次，Go 前门启动时间不变（2026-09-18）。迁移 027/028 已应用（`usage_logs.session_id`/`reasoning_effort`、`proxies.label`），新请求已写 session_id；`/api/panel/usage-logs*`、`/api/panel/statistics*`、`/api/panel/proxies` 在 8788 与 8787 均 200；`dl` 软链保留。verify-live 全 PASS（9/9 容器 ID 不变、10 VM、haiku 200 pong）。远端 `/tmp` 包和 stage 已删。
+
+2026-10-05 1.3.106：DNS 64/65 开关，PR [#245](https://github.com/dofastted/vm2api/pull/245)；功能提交 `1373309`、版本提交 `eca6f2d`，main/tag `v1.3.106` = `8b4de0dafe55e15068aedaeaa30be9b90b07aed5`。按用户要求先发布 Release 再部署 当时的生产机。PR CI `37229759216`、main CI `37230225560`、Release `37230299005` 全成功，8 个附件齐全。发布工作树 `/mnt/x/vm2api-dns-1.3.106` 从最新主线建立，仅提取 DNS 改动；原 `feat/macos` 工作区保留。`bin/egress` SHA256 `a1cd7e18e5a61323a816d86de9e09926c0bade24e0c33559fd2c02f45b7fd3ad`；kernel、CLI、worker、换票、crag、依赖清单与线上原版本一致，无需 `wrap-cli/sync`。包 SHA256 `092fe1306fc98ae22f69c1ac98fcc632637159dc5c79e4a646189438988f3918`（105416957 字节）。备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.106-20261004T200210Z`，额外保存旧 `VERSION` 供回滚；Node 重启一次，Go 前门启动时间不变。verify-live 全 PASS（10 VM、9/9 容器 ID 不变、真实 haiku `200 pong`）；8787/8788 均能读取新参数，线上开关当前为 true；4/4 本机已绑定出口运行新二进制且配置 `dns_empty_types: [64,65]`，实际网桥监听的 UDP/TCP type64/65 共16项验证全部返回 NOERROR 空答案。未重建槽容器；集群出口仍按下次启动/重载读取新配置的约定。独立工作树相关 Node 61项、API1项、前端295项、worker全量race、DNS vet、前端类型/构建/lint/格式检查通过。
+
+2026-10-05 1.3.107：#246 ARM64 发布物（含 #243）+ #247 `/logs` 详情弹窗 / 出站 Session（含 #240）。#247 远端分支已由他人合过 main@#240 并重建 `web/dist`，与本地合入 #246 后的非 web 源码零差异（本地全量 unit 2132 pass / 0 fail），直接合并。发版 PR [#249](https://github.com/dofastted/vm2api/pull/249)，main/tag `v1.3.107` = `8cddc24744d71c23ed15c2e80f468911e0418702`，PR CI `37255093238`（含 arm64）、Release `37255393482` 全成功；10 附件（8 个 amd64 + `kin-worker-linux-arm64` / `kin-egress-linux-arm64`），GHCR `v1.3.107` 为 amd64+arm64 多架构清单。workflow 自带的 Release 正文只有架构说明，已用 `gh release edit` 把 CHANGELOG 1.3.107 段放在前面。kernel、CLI、cc-node、codex-kernel、worker、egress、oauth-auth、`package*.json` 与线上 1.3.106 SHA256 一致，**没做 wrap-cli/sync、没装依赖**。包 SHA256 `7ba083736a53717b156cdc51272d85021d67d58dac8df7df119534fbcff2525f`（105423214 字节）。备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.107-20261005T023241Z`，Node 重启一次，Go 前门启动时间不变（2026-09-18）。verify-live 全 PASS（10 VM、9/9 容器 ID 不变、haiku `200 pong`）。迁移 029 已应用，重启后新行 `outbound_session_id` 与客户端 `session_id` 不同；`/api/panel/usage-logs`、`active-sessions`、`overview`、`statistics` 在 8788/8787 均 200，返回 `sessionId`（出站）+ `clientSessionId`。线上 `logs-WLr2AAP8.js` 与 `index.html` 与 tag 构建字节一致（公网首页差异仅 Cloudflare 注入的隐藏链接）。发布工作树 `/mnt/x/vm2api-logs-247` 已删。
+
+2026-10-05 1.3.108：搜索历史修复跳不再被已用尽的 120 秒总重试期限丢掉，并带上已在 main 的 #250（出站请求体只在运维 Debug 模式保存）。PR [#251](https://github.com/dofastted/vm2api/pull/251)，main/tag `v1.3.108` = `dac0e18`（merge），功能提交 `aec4501`、版本提交 `73b3a90`。PR CI `37288488221`、Release `37289562650` 全成功；10 附件（8 amd64 + 2 arm64）。workflow 正文只有架构说明，已用 `gh release edit` 把 CHANGELOG 1.3.108 段放在前面。kernel `6ec05f35…`、cli-node `7b23385e…`、cc-node、codex-kernel `4fd6189f…`、worker `f310d647…`、egress `a1cd7e18…`、oauth-auth `1029f5d1…`、crag `5764a186…` 与线上 1.3.107 一致，**没做 wrap-cli/sync、没装依赖**。包 SHA256 `26b00ddf1a27b4f29dbc2a7ad2a25f2007e256d883ec153659199e71b241f4ff`（105418411 字节）。备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.108-20261005T093128Z`。apply 重启 Node 一次（09:31:43 UTC）后，开机 5 秒的定时备份在主线程 `VACUUM INTO` 2.3GB `kin.db` 再 `tar`，面板不响应；09:44:48 UTC 又重启了一次 Node（杀掉进行中的 tar，残留 501MB 坏包已删）。第二次备份跑完后 `/health` 恢复。Go 前门启动时间仍是 2026-09-18。verify-live 全 PASS（10 VM、9/9 容器 ID 不变、haiku `200 pong`）。远端 `/tmp` 包已删。磁盘约 93%。
+
 ## 本机一键脚本
 
-`deploy/install.sh` 按 GitHub Release 装到 `/opt/vm2api`，不是 HostDzire 的 `/opt/kin-gateway`。控制台用仓内预编译 `web/dist`，镜像和一键脚本都不在目标机跑 `pnpm build`。
+`deploy/install.sh` 按 GitHub Release 装到 `/opt/vm2api`，不是 Netcup 的 `/opt/kin-gateway`。控制台用仓内预编译 `web/dist`，镜像和一键脚本都不在目标机跑 `pnpm build`。
 
 ```sh
 sudo bash deploy/install.sh status
@@ -208,4 +299,6 @@ docker exec vm2api node --input-type=module -e 'const r = await fetch("http://12
 
 2026-10-03 PR阶段：用户反馈自测暂时正常并授权PR包含压缩二进制，A18更新USER_REPORTED，未取得其分类trace；此前自动-p号池受阻结果保留。PR使用origin/main独立工作树，CLI/kernel hash沿用上表；公开E2E改用最小客户端XML解析语义fixture，去掉忽略的docs/auto-mode源码依赖。
 
-2026-10-03发布完成：[v1.3.94](https://github.com/dofastted/vm2api/releases/tag/v1.3.94)，包含PR208原生重置、PR209auto适配及PR210版本/web重编；main 5e6df3f541e8aa3cc3db3e48d7a55f0cadaeb78e。两项PR的登录页格式CI已修复，最终main CI/Release工作流全绿。HostDzire完整gate退出0，6运行Claude槽worker更新、配套kernel/CLI hash和能力一致，8容器ID不变，真实对话pong、重置只读查询200。详情research/release-1.3.94.md；真实分类trace限制和A18 USER_REPORTED保留。
+2026-10-03发布完成：[v1.3.94](https://github.com/dofastted/vm2api/releases/tag/v1.3.94)，包含PR208原生重置、PR209auto适配及PR210版本/web重编；main 5e6df3f541e8aa3cc3db3e48d7a55f0cadaeb78e。两项PR的登录页格式CI已修复，最终main CI/Release工作流全绿。当时的生产机完整gate退出0，6运行Claude槽worker更新、配套kernel/CLI hash和能力一致，8容器ID不变，真实对话pong、重置只读查询200。详情research/release-1.3.94.md；真实分类trace限制和A18 USER_REPORTED保留。
+
+2026-10-06 1.3.109 热修复（VERSION 不变）：PR [#256](https://github.com/dofastted/vm2api/pull/256)（`4a9a4a4`，merge `b983cde`）运行中本地槽判活改看 `run/kernel.sock`，reload/start 不再 `docker rm -f`；遥测 sidecar 在 restart/start 后补起 + 看门狗每 10 分钟自愈。首次部署（备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.109-20261006T031449Z`）后发现看门狗 `isKernelWatchdogTarget` 对线上全部 10 个 VM 为 false（`inference_engine` 为空、无 `runtime.engine`），自愈没跑；PR [#257](https://github.com/dofastted/vm2api/pull/257)（`3cbac95`，merge `cfb00c9`）改为对所有非 kvm、非停机槽检查。二次部署备份 `/opt/kin-gateway/.deploy-bak-vm2api-1.3.109-20261006T035422Z`，包 SHA256 前缀 `c53dfc6d`。两次各重启 Node 一次，Go 前门 PID 3083711 未动；kernel/cli-node/cc-node/codex-kernel/worker/egress/oauth-auth 与线上一致，没做 wrap-cli/sync。两次 verify-live 全 PASS（9/9 容器 ID 不变、haiku 200 pong；第二次首跑因 Node 未就绪失败，20 秒后重跑通过）。部署后 5 个遥测开启且缺 sidecar 的槽被看门狗补起，所有开启遥测的槽各 1 个 sidecar；vm-15、codex-01 遥测关闭。**未处理**：看门狗 L4 容器重启同样对线上所有槽不生效（目标过滤），开启会改变生产重启行为，待决定；VM 详情页遥测探针 2.5s 超时在线上恒为「未知」（docker exec 3–5s）。
