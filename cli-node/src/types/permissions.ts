@@ -438,4 +438,7 @@ export type ToolPermissionContext = {
   readonly shouldAvoidPermissionPrompts?: boolean
   readonly awaitAutomatedChecksBeforeDialog?: boolean
   readonly prePlanMode?: PermissionMode
+  /** --restricted: confine file tools to cwd/--add-dir and refuse bypass. */
+  readonly restricted?: boolean
+  readonly blockReadsOutsideWorkingDirectories?: boolean
 }
