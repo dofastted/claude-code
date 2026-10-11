@@ -53,7 +53,7 @@ const agentsPlatform =
 import securityReview from './commands/security-review.js'
 import bughunter from './commands/bughunter/index.js'
 import terminalSetup from './commands/terminalSetup/index.js'
-import usage from './commands/usage/index.js'
+import { usage, usageNonInteractive } from './commands/usage/index.js'
 import theme from './commands/theme/index.js'
 import vim from './commands/vim/index.js'
 import { feature } from 'bun:bundle'
@@ -153,6 +153,7 @@ import advisor from './commands/advisor.js'
 import { logError } from './utils/log.js'
 import { toError } from './utils/errors.js'
 import { logForDebugging } from './utils/debug.js'
+import { isCustomizationDisabled } from './utils/envUtils.js'
 import {
   getSkillDirCommands,
   clearSkillCaches,
@@ -315,6 +316,7 @@ const COMMANDS = memoize((): Command[] => [
   extraUsageNonInteractive,
   rateLimitOptions,
   usage,
+  usageNonInteractive,
   usageReport,
   vim,
   ...(webCmd ? [webCmd] : []),
@@ -454,7 +456,9 @@ const loadAllCommands = memoize(async (cwd: string): Promise<Command[]> => {
   ] = await Promise.all([
     getSkills(cwd),
     getPluginCommands(),
-    getWorkflowCommands ? getWorkflowCommands(cwd) : Promise.resolve([]),
+    getWorkflowCommands && !isCustomizationDisabled('workflows')
+      ? getWorkflowCommands(cwd)
+      : Promise.resolve([]),
   ])
 
   return [

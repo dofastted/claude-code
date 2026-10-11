@@ -65,6 +65,148 @@ export function isBareMode(): boolean {
 }
 
 /**
+ * --safe-mode / CLAUDE_CODE_SAFE_MODE — disable user customizations
+ * (CLAUDE.md, skills, installed plugins, MCP auto-discovery, custom
+ * commands/agents, output styles) while auth, model selection, built-in
+ * tools/plugins, hooks, statusLine, fileSuggestion, and permissions still
+ * work. Policy settings still apply. --add-dir/--plugin-dir are not
+ * escape hatches here (they are in --bare).
+ * Argv is checked because gates run before the action handler sets the env.
+ */
+export function isSafeMode(): boolean {
+  return (
+    isEnvTruthy(process.env.CLAUDE_CODE_SAFE_MODE) ||
+    process.argv.includes('--safe-mode')
+  )
+}
+
+/**
+ * --restricted / CLAUDE_CODE_RESTRICTED — confine file tools to cwd/--add-dir,
+ * drop code-executing tools and WebFetch unless --tools names them, ignore
+ * user/project/local settings, refuse bypassPermissions/cloud/ssh.
+ */
+export function isRestrictedMode(): boolean {
+  return (
+    isEnvTruthy(process.env.CLAUDE_CODE_RESTRICTED) ||
+    process.argv.includes('--restricted')
+  )
+}
+
+export type CustomizationFeature =
+  | 'claudeMd'
+  | 'skills'
+  | 'workflows'
+  | 'plugins'
+  | 'pluginMonitors'
+  | 'themes'
+  | 'hljsLanguages'
+  | 'hooks'
+  | 'statusLine'
+  | 'fileSuggestion'
+  | 'mcpAutoDiscovered'
+  | 'mcpClaudeAi'
+  | 'mcpAgentFrontmatter'
+  | 'agents'
+  | 'outputStyles'
+  | 'lspServers'
+  | 'keybindings'
+
+/** Bare: true = disabled unless opts.explicitlyRequested. Official t. */
+const BARE_DISABLED: Record<CustomizationFeature, boolean> = {
+  claudeMd: true,
+  skills: true,
+  workflows: false,
+  plugins: true,
+  pluginMonitors: false,
+  themes: false,
+  hljsLanguages: true,
+  hooks: true,
+  statusLine: false,
+  fileSuggestion: false,
+  mcpAutoDiscovered: false,
+  mcpClaudeAi: false,
+  mcpAgentFrontmatter: true,
+  agents: true,
+  outputStyles: false,
+  lspServers: true,
+  keybindings: false,
+}
+
+/** Safe: true = still loaded in --safe-mode. Official l. */
+const SAFE_ALLOWED: Record<CustomizationFeature, boolean> = {
+  claudeMd: false,
+  skills: false,
+  workflows: false,
+  plugins: false,
+  pluginMonitors: false,
+  themes: false,
+  hljsLanguages: false,
+  hooks: true,
+  statusLine: true,
+  fileSuggestion: true,
+  mcpAutoDiscovered: false,
+  mcpClaudeAi: false,
+  mcpAgentFrontmatter: false,
+  agents: false,
+  outputStyles: false,
+  lspServers: false,
+  keybindings: false,
+}
+
+/** Restricted: true = disabled when --restricted. Official o. */
+const RESTRICTED_DISABLED: Record<CustomizationFeature, boolean> = {
+  claudeMd: false,
+  skills: false,
+  workflows: false,
+  plugins: false,
+  pluginMonitors: false,
+  themes: false,
+  hljsLanguages: false,
+  hooks: false,
+  statusLine: true,
+  fileSuggestion: true,
+  mcpAutoDiscovered: false,
+  mcpClaudeAi: false,
+  mcpAgentFrontmatter: false,
+  agents: false,
+  outputStyles: false,
+  lspServers: false,
+  keybindings: false,
+}
+
+/**
+ * Official qr(feature, {explicitlyRequested?}).
+ * Restricted and safe ignore explicitlyRequested. Bare uses it as an escape
+ * hatch (--add-dir, --plugin-dir, --agents JSON).
+ */
+export function isCustomizationDisabled(
+  feature: CustomizationFeature,
+  opts?: { explicitlyRequested?: boolean },
+): boolean {
+  if (RESTRICTED_DISABLED[feature] && isRestrictedMode()) {
+    return true
+  }
+  if (isSafeMode() && !SAFE_ALLOWED[feature]) {
+    return true
+  }
+  if (isBareMode() && !opts?.explicitlyRequested) {
+    return BARE_DISABLED[feature]
+  }
+  return false
+}
+
+/**
+ * Official PP(): CLAUDE_CODE_DISABLE_CLAUDE_MDS or qr("claudeMd",
+ * {explicitlyRequested: additionalDirectories.length > 0}).
+ */
+export function isClaudeMdDisabled(explicitlyRequested = false): boolean {
+  return (
+    isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS) ||
+    isCustomizationDisabled('claudeMd', { explicitlyRequested })
+  )
+}
+
+/**
  * Parses an array of environment variable strings into a key-value object
  * @param envVars Array of strings in KEY=VALUE format
  * @returns Object with key-value pairs
@@ -155,6 +297,7 @@ export function isInProtectedNamespace(): boolean {
 const VERTEX_REGION_OVERRIDES: ReadonlyArray<[string, string]> = [
   ['claude-sonnet-5-5', 'VERTEX_REGION_CLAUDE_5_5_SONNET'],
   ['claude-sonnet-5', 'VERTEX_REGION_CLAUDE_5_SONNET'],
+  ['claude-haiku-5-5', 'VERTEX_REGION_CLAUDE_HAIKU_5_5'],
   ['claude-haiku-4-5', 'VERTEX_REGION_CLAUDE_HAIKU_4_5'],
   ['claude-3-5-haiku', 'VERTEX_REGION_CLAUDE_3_5_HAIKU'],
   ['claude-3-5-sonnet', 'VERTEX_REGION_CLAUDE_3_5_SONNET'],

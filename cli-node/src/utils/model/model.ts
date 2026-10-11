@@ -42,7 +42,8 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
     model === getModelStrings().opus40 ||
     model === getModelStrings().opus41 ||
     model === getModelStrings().opus45 ||
-    model === getModelStrings().opus46
+    model === getModelStrings().opus46 ||
+    model === getModelStrings().opus55
   )
 }
 
@@ -106,10 +107,9 @@ export function getDefaultOpusModel(): ModelName {
   if (process.env.ANTHROPIC_DEFAULT_OPUS_MODEL) {
     return process.env.ANTHROPIC_DEFAULT_OPUS_MODEL
   }
-  // 3P providers (Bedrock, Vertex, Foundry) — kept as a separate branch
-  // even when values match, since 3P availability lags firstParty and
-  // these will diverge again at the next model launch.
-  if (getAPIProvider() !== 'firstParty') {
+  // Alias fallback (not the explicit 5.5 provider IDs in configs):
+  // firstParty/Bedrock/Vertex → 5.5; Foundry lags at 4.6.
+  if (getAPIProvider() === 'foundry') {
     return getModelStrings().opus46
   }
   return getModelStrings().opus55
@@ -120,9 +120,9 @@ export function getDefaultSonnetModel(): ModelName {
   if (process.env.ANTHROPIC_DEFAULT_SONNET_MODEL) {
     return process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
   }
-  // 3P catalogs lag. Sonnet 5.5 falls back to Sonnet 5.
+  // Alias fallback: firstParty → 5.5; Bedrock/Vertex/Foundry → 4.5.
   if (getAPIProvider() !== 'firstParty') {
-    return getModelStrings().sonnet5
+    return getModelStrings().sonnet45
   }
   return getModelStrings().sonnet55
 }
@@ -132,9 +132,11 @@ export function getDefaultHaikuModel(): ModelName {
   if (process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL) {
     return process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL
   }
-
-  // Haiku 4.5 is available on all platforms (first-party, Foundry, Bedrock, Vertex)
-  return getModelStrings().haiku45
+  // Alias fallback: firstParty → 5.5; all 3P → 4.5.
+  if (getAPIProvider() !== 'firstParty') {
+    return getModelStrings().haiku45
+  }
+  return getModelStrings().haiku55
 }
 
 /**
@@ -216,8 +218,20 @@ export function getDefaultMainLoopModel(): ModelName {
  */
 export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   name = name.toLowerCase()
-  // Special cases for Claude 4+ models to differentiate versions
-  // Order matters: check more specific versions first (4-5 before 4)
+  // Special cases for Claude 4+ models to differentiate versions.
+  // Order matters: more specific versions first (5-5 before 5, 4-6 before 4).
+  if (name.includes('claude-opus-5-5')) {
+    return 'claude-opus-5-5'
+  }
+  if (name.includes('claude-opus-5')) {
+    return 'claude-opus-5'
+  }
+  if (name.includes('claude-opus-4-8')) {
+    return 'claude-opus-4-8'
+  }
+  if (name.includes('claude-opus-4-7')) {
+    return 'claude-opus-4-7'
+  }
   if (name.includes('claude-opus-4-6')) {
     return 'claude-opus-4-6'
   }
@@ -230,6 +244,12 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   if (name.includes('claude-opus-4')) {
     return 'claude-opus-4'
   }
+  if (name.includes('claude-sonnet-5-5')) {
+    return 'claude-sonnet-5-5'
+  }
+  if (name.includes('claude-sonnet-5')) {
+    return 'claude-sonnet-5'
+  }
   if (name.includes('claude-sonnet-4-6')) {
     return 'claude-sonnet-4-6'
   }
@@ -238,6 +258,9 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   }
   if (name.includes('claude-sonnet-4')) {
     return 'claude-sonnet-4'
+  }
+  if (name.includes('claude-haiku-5')) {
+    return 'claude-haiku-5-5'
   }
   if (name.includes('claude-haiku-4-5')) {
     return 'claude-haiku-4-5'
@@ -288,11 +311,11 @@ export function getClaudeAiUserDefaultModelDescription(
 ): string {
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
     if (isOpus1mMergeEnabled()) {
-      return `Opus 4.6 with 1M context · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
+      return `Opus 5.5 with 1M context · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
     }
-    return `Opus 4.6 · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
+    return `Opus 5.5 · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
   }
-  return 'Sonnet 4.6 · Best for everyday tasks'
+  return 'Sonnet 5.5 · Best for everyday tasks'
 }
 
 export function renderDefaultModelSetting(
@@ -350,6 +373,8 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
   switch (model) {
     case getModelStrings().opus55:
       return 'Opus 5.5'
+    case getModelStrings().opus55 + '[1m]':
+      return 'Opus 5.5 (1M context)'
     case getModelStrings().opus46:
       return 'Opus 4.6'
     case getModelStrings().opus46 + '[1m]':
@@ -362,8 +387,12 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
       return 'Opus 4'
     case getModelStrings().sonnet55:
       return 'Sonnet 5.5'
+    case getModelStrings().sonnet55 + '[1m]':
+      return 'Sonnet 5.5 (1M context)'
     case getModelStrings().sonnet5:
       return 'Sonnet 5'
+    case getModelStrings().sonnet5 + '[1m]':
+      return 'Sonnet 5 (1M context)'
     case getModelStrings().sonnet46 + '[1m]':
       return 'Sonnet 4.6 (1M context)'
     case getModelStrings().sonnet46:
@@ -380,6 +409,8 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
       return 'Sonnet 3.7'
     case getModelStrings().sonnet35:
       return 'Sonnet 3.5'
+    case getModelStrings().haiku55:
+      return 'Haiku 5.5'
     case getModelStrings().haiku45:
       return 'Haiku 4.5'
     case getModelStrings().haiku35:
@@ -582,6 +613,12 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   const has1m = modelId.toLowerCase().includes('[1m]')
   const canonical = getCanonicalName(modelId)
 
+  if (canonical.includes('claude-opus-5-5')) {
+    return has1m ? 'Opus 5.5 (with 1M context)' : 'Opus 5.5'
+  }
+  if (canonical.includes('claude-opus-5')) {
+    return has1m ? 'Opus 5 (with 1M context)' : 'Opus 5'
+  }
   if (canonical.includes('claude-opus-4-6')) {
     return has1m ? 'Opus 4.6 (with 1M context)' : 'Opus 4.6'
   }
@@ -593,6 +630,12 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   }
   if (canonical.includes('claude-opus-4')) {
     return 'Opus 4'
+  }
+  if (canonical.includes('claude-sonnet-5-5')) {
+    return has1m ? 'Sonnet 5.5 (with 1M context)' : 'Sonnet 5.5'
+  }
+  if (canonical.includes('claude-sonnet-5')) {
+    return has1m ? 'Sonnet 5 (with 1M context)' : 'Sonnet 5'
   }
   if (canonical.includes('claude-sonnet-4-6')) {
     return has1m ? 'Sonnet 4.6 (with 1M context)' : 'Sonnet 4.6'
@@ -608,6 +651,9 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   }
   if (canonical.includes('claude-3-5-sonnet')) {
     return 'Claude 3.5 Sonnet'
+  }
+  if (canonical.includes('claude-haiku-5')) {
+    return 'Haiku 5.5'
   }
   if (canonical.includes('claude-haiku-4-5')) {
     return 'Haiku 4.5'

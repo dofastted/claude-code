@@ -32,6 +32,7 @@ import {
 import {
   getClaudeConfigHomeDir,
   isBareMode,
+  isCustomizationDisabled,
   isEnvTruthy,
 } from '../utils/envUtils.js'
 import { isENOENT, isFsInaccessible } from '../utils/errors.js'
@@ -651,17 +652,19 @@ export const getSkillDirCommands = memoize(
     const projectSettingsEnabled =
       isSettingSourceEnabled('projectSettings') && !skillsLocked
 
-    // --bare: skip auto-discovery (managed/user/project dir walks + legacy
-    // commands-dir). Load ONLY explicit --add-dir paths. Bundled skills
-    // register separately. skillsLocked still applies — --bare is not a
-    // policy bypass.
+    // Official GTr: qr("skills", {explicitlyRequested: add-dir && projectSettings})
+    // skips ALL skill dir discovery (including managed). Safe ignores the
+    // explicit hatch. Bare with --add-dir falls through to add-dir-only.
+    if (
+      isCustomizationDisabled('skills', {
+        explicitlyRequested:
+          additionalDirs.length > 0 && projectSettingsEnabled,
+      })
+    ) {
+      logForDebugging('[reduced mode] Skipping skill dir discovery')
+      return []
+    }
     if (isBareMode()) {
-      if (additionalDirs.length === 0 || !projectSettingsEnabled) {
-        logForDebugging(
-          `[bare] Skipping skill dir discovery (${additionalDirs.length === 0 ? 'no --add-dir' : 'projectSettings disabled or skillsLocked'})`,
-        )
-        return []
-      }
       const additionalSkillsNested = await Promise.all(
         additionalDirs.map(dir =>
           loadSkillsFromSkillsDir(
@@ -862,6 +865,9 @@ export async function discoverSkillDirsForPaths(
   filePaths: string[],
   cwd: string,
 ): Promise<string[]> {
+  if (isCustomizationDisabled('skills')) {
+    return []
+  }
   const fs = getFsImplementation()
   const resolvedCwd = cwd.endsWith(pathSep) ? cwd.slice(0, -1) : cwd
   const newDirs: string[] = []
@@ -922,11 +928,12 @@ export async function discoverSkillDirsForPaths(
  */
 export async function addSkillDirectories(dirs: string[]): Promise<void> {
   if (
+    isCustomizationDisabled('skills') ||
     !isSettingSourceEnabled('projectSettings') ||
     isRestrictedToPluginOnly('skills')
   ) {
     logForDebugging(
-      '[skills] Dynamic skill discovery skipped: projectSettings disabled or plugin-only policy',
+      '[skills] Dynamic skill discovery skipped: customization disabled, projectSettings disabled, or plugin-only policy',
     )
     return
   }

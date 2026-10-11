@@ -4,9 +4,13 @@ import { getAPIProvider } from './providers.js'
 export type ModelCapabilityOverride =
   | 'effort'
   | 'max_effort'
+  | 'xhigh_effort'
   | 'thinking'
   | 'adaptive_thinking'
   | 'interleaved_thinking'
+  | 'temperature'
+  | 'rejects_disabled_thinking'
+  | 'thinking_disabled_effort_cap'
 
 const TIERS = [
   {

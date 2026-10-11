@@ -5,6 +5,8 @@ import { isProSubscriber, isMaxSubscriber, isTeamSubscriber } from './auth.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
 import { getAPIProvider } from './model/providers.js'
 import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
+import { resolveAntModel, getAntModelOverrideConfig } from './model/antModels.js'
+import { getCanonicalName } from './model/model.js'
 import { isEnvTruthy } from './envUtils.js'
 import type { EffortLevel } from 'src/entrypoints/sdk/runtimeTypes.js'
 
@@ -14,14 +16,33 @@ export const EFFORT_LEVELS = [
   'low',
   'medium',
   'high',
+  'xhigh',
   'max',
 ] as const satisfies readonly EffortLevel[]
 
 export type EffortValue = EffortLevel | number
 
+const EFFORT_VALUE_ALIASES: Record<string, EffortLevel> = {
+  med: 'medium',
+  ultracode: 'xhigh',
+}
+
+function remainingClaudeFamilySupports(
+  canonical: string,
+  firstPartyUnknown: boolean,
+): boolean {
+  if (
+    canonical.includes('opus') ||
+    canonical.includes('sonnet') ||
+    canonical.includes('haiku')
+  ) {
+    return true
+  }
+  return firstPartyUnknown && getAPIProvider() === 'firstParty'
+}
+
 // @[MODEL LAUNCH]: Add the new model to the allowlist if it supports the effort parameter.
 export function modelSupportsEffort(model: string): boolean {
-  const m = model.toLowerCase()
   if (isEnvTruthy(process.env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT)) {
     return true
   }
@@ -29,39 +50,98 @@ export function modelSupportsEffort(model: string): boolean {
   if (supported3P !== undefined) {
     return supported3P
   }
-  // Supported by a subset of Claude 4 models
-  if (m.includes('opus-4-6') || m.includes('sonnet-4-6')) {
-    return true
-  }
-  // Exclude any other known legacy models (haiku, older opus/sonnet variants)
-  if (m.includes('haiku') || m.includes('sonnet') || m.includes('opus')) {
+  const canonical = getCanonicalName(model)
+  // Official Xv denylist
+  if (
+    canonical.includes('claude-3-') ||
+    canonical === 'claude-opus-4' ||
+    canonical === 'claude-opus-4-1' ||
+    canonical === 'claude-sonnet-4' ||
+    canonical === 'claude-sonnet-4-5' ||
+    canonical === 'claude-haiku-4-5'
+  ) {
     return false
   }
-
   // IMPORTANT: Do not change the default effort support without notifying
   // the model launch DRI and research. This is a sensitive setting that can
   // greatly affect model quality and bashing.
-
-  // Default to true for unknown model strings on 1P.
-  // Do not default to true for 3P as they have different formats for their
-  // model strings (ex. anthropics/claude-code#30795)
-  return getAPIProvider() === 'firstParty'
+  return remainingClaudeFamilySupports(canonical, true)
 }
 
 // @[MODEL LAUNCH]: Add the new model to the allowlist if it supports 'max' effort.
-// Per API docs, 'max' is Opus 4.6 only for public models — other models return an error.
 export function modelSupportsMaxEffort(model: string): boolean {
   const supported3P = get3PModelCapabilityOverride(model, 'max_effort')
   if (supported3P !== undefined) {
     return supported3P
   }
-  if (model.toLowerCase().includes('opus-4-6')) {
-    return true
+  const canonical = getCanonicalName(model)
+  // Official Wte denylist (adds opus-4-5 vs effort)
+  if (
+    canonical.includes('claude-3-') ||
+    canonical === 'claude-opus-4' ||
+    canonical === 'claude-opus-4-1' ||
+    canonical === 'claude-opus-4-5' ||
+    canonical === 'claude-sonnet-4' ||
+    canonical === 'claude-sonnet-4-5' ||
+    canonical === 'claude-haiku-4-5'
+  ) {
+    return false
   }
   if (process.env.USER_TYPE === 'ant' && resolveAntModel(model)) {
     return true
   }
-  return false
+  return remainingClaudeFamilySupports(canonical, false)
+}
+
+// @[MODEL LAUNCH]: Add the new model to the allowlist if it supports 'xhigh' effort.
+export function modelSupportsXHighEffort(model: string): boolean {
+  const supported3P = get3PModelCapabilityOverride(model, 'xhigh_effort')
+  if (supported3P !== undefined) {
+    return supported3P
+  }
+  const canonical = getCanonicalName(model)
+  // Official Trt denylist (adds opus-4-6 and sonnet-4-6 vs max)
+  if (
+    canonical.includes('claude-3-') ||
+    canonical === 'claude-opus-4' ||
+    canonical === 'claude-opus-4-1' ||
+    canonical === 'claude-opus-4-5' ||
+    canonical === 'claude-opus-4-6' ||
+    canonical === 'claude-sonnet-4' ||
+    canonical === 'claude-sonnet-4-5' ||
+    canonical === 'claude-sonnet-4-6' ||
+    canonical === 'claude-haiku-4-5'
+  ) {
+    return false
+  }
+  if (process.env.USER_TYPE === 'ant' && resolveAntModel(model)) {
+    return true
+  }
+  return remainingClaudeFamilySupports(canonical, true)
+}
+
+export function getAvailableEffortLevels(model: string): EffortLevel[] {
+  return EFFORT_LEVELS.filter(level => {
+    if (level === 'max') return modelSupportsMaxEffort(model)
+    if (level === 'xhigh') return modelSupportsXHighEffort(model)
+    return true
+  })
+}
+
+export function effortLevelAboveHigh(level: EffortLevel): boolean {
+  return level === 'xhigh' || level === 'max'
+}
+
+/** Official _pr: catalog thinking_disabled_effort_cap, else opus-5 only (not 5.5). */
+export function modelCapsEffortWhenDisabled(model: string): boolean {
+  const supported3P = get3PModelCapabilityOverride(
+    model,
+    'thinking_disabled_effort_cap',
+  )
+  if (supported3P !== undefined) {
+    return supported3P
+  }
+  return getCanonicalName(model) === 'claude-opus-5'
 }
 
 export function isEffortLevel(value: string): value is EffortLevel {
@@ -75,15 +155,33 @@ export function parseEffortValue(value: unknown): EffortValue | undefined {
   if (typeof value === 'number' && isValidNumericEffort(value)) {
     return value
   }
-  const str = String(value).toLowerCase()
-  if (isEffortLevel(str)) {
-    return str
+  const str = String(value).toLowerCase().trim()
+  const aliased = EFFORT_VALUE_ALIASES[str] ?? str
+  if (isEffortLevel(aliased)) {
+    return aliased
   }
   const numericValue = parseInt(str, 10)
   if (!isNaN(numericValue) && isValidNumericEffort(numericValue)) {
     return numericValue
   }
   return undefined
+}
+
+/** CLI --effort: unknown values warn and are ignored (official Crt). */
+export function parseCliEffort(value: string): {
+  level: EffortLevel | undefined
+  warning?: string
+} {
+  const aliased =
+    EFFORT_VALUE_ALIASES[value.trim().toLowerCase()] ??
+    value.trim().toLowerCase()
+  if (isEffortLevel(aliased)) {
+    return { level: aliased }
+  }
+  return {
+    level: undefined,
+    warning: `Unknown --effort value '${value}' — ignoring it and using the default effort. Valid values: ${EFFORT_LEVELS.join(', ')}.`,
+  }
 }
 
 /**
@@ -95,7 +193,12 @@ export function parseEffortValue(value: unknown): EffortValue | undefined {
 export function toPersistableEffort(
   value: EffortValue | undefined,
 ): EffortLevel | undefined {
-  if (value === 'low' || value === 'medium' || value === 'high') {
+  if (
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high' ||
+    value === 'xhigh'
+  ) {
     return value
   }
   if (value === 'max' && process.env.USER_TYPE === 'ant') {
@@ -159,8 +262,10 @@ export function resolveAppliedEffort(
   }
   const resolved =
     envOverride ?? appStateEffortValue ?? getDefaultEffortForModel(model)
-  // API rejects 'max' on non-Opus-4.6 models — downgrade to 'high'.
   if (resolved === 'max' && !modelSupportsMaxEffort(model)) {
+    return 'high'
+  }
+  if (resolved === 'xhigh' && !modelSupportsXHighEffort(model)) {
     return 'high'
   }
   return resolved
@@ -229,8 +334,10 @@ export function getEffortLevelDescription(level: EffortLevel): string {
       return 'Balanced approach with standard implementation and testing'
     case 'high':
       return 'Comprehensive implementation with extensive testing and documentation'
+    case 'xhigh':
+      return 'Deeper reasoning than high, just below maximum (on supported models)'
     case 'max':
-      return 'Maximum capability with deepest reasoning (Opus 4.6 only)'
+      return 'Maximum capability with deepest reasoning. May use excessive tokens resulting in long response times or overthinking. Use sparingly for the hardest tasks.'
   }
 }
 
@@ -304,7 +411,13 @@ export function getDefaultEffortForModel(
   // the model launch DRI and research. Default effort is a sensitive setting
   // that can greatly affect model quality and bashing.
 
-  if (model.toLowerCase().includes('sonnet-5-5')) return 'medium'
+  if (
+    model.toLowerCase().includes('sonnet-5-5') ||
+    model.toLowerCase().includes('opus-5-5') ||
+    model.toLowerCase().includes('haiku-5')
+  ) {
+    return 'medium'
+  }
 
   // Default effort on Opus 4.6 to medium for Pro.
   // Max/Team also get medium when the tengu_grey_step2 config is enabled.

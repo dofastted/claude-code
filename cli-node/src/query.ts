@@ -5,6 +5,7 @@ import type {
 } from '@anthropic-ai/sdk/resources/index.mjs'
 import type { CanUseToolFn } from './hooks/useCanUseTool.js'
 import { FallbackTriggeredError } from './services/api/withRetry.js'
+import { buildFallbackChain, normalizeFallbackModels } from './utils/fallbackModel.js'
 import {
   calculateTokenWarningState,
   isAutoCompactEnabled,
@@ -78,9 +79,11 @@ import {
 import { notifyCommandLifecycle } from './utils/commandLifecycle.js'
 import { headlessProfilerCheckpoint } from './utils/headlessProfiler.js'
 import {
+  getDefaultMainLoopModel,
   getRuntimeMainLoopModel,
   renderModelName,
 } from './utils/model/model.js'
+import { isModelAllowed } from './utils/model/modelAllowlist.js'
 import {
   doesMostRecentAssistantMessageExceed200k,
   finalContextTokensFromLastResponse,
@@ -185,7 +188,8 @@ export type QueryParams = {
   systemContext: { [k: string]: string }
   canUseTool: CanUseToolFn
   toolUseContext: ToolUseContext
-  fallbackModel?: string
+  /** Ordered fallback hop list or a single model. Normalized at the CLI boundary. */
+  fallbackModel?: string | string[]
   querySource: QuerySource
   maxOutputTokensOverride?: number
   maxTurns?: number
@@ -261,6 +265,13 @@ async function* queryLoop(
     skipCacheWrite,
   } = params
   const deps = params.deps ?? productionDeps()
+  const fallbackList = normalizeFallbackModels(
+    fallbackModel,
+    getDefaultMainLoopModel,
+    isModelAllowed,
+  )
+  let fallbackHop = 0
+  let fallbackChain: string[] = []
 
   // Mutable cross-iteration state. The loop body destructures this at the top
   // of each iteration so reads stay bare-name (`messages`, `toolUseContext`).
@@ -576,6 +587,13 @@ async function* queryLoop(
         permissionMode === 'plan' &&
         doesMostRecentAssistantMessageExceed200k(messagesForQuery),
     })
+    if (fallbackChain.length === 0) {
+      fallbackChain = process.env.CLAUDE_CODE_NO_MODEL_FALLBACK
+        ? [currentModel]
+        : buildFallbackChain(currentModel, fallbackList)
+    }
+    currentModel = fallbackChain[fallbackHop] ?? currentModel
+    const nextFallbackHop = fallbackChain[fallbackHop + 1]
 
     queryCheckpoint('query_setup_end')
 
@@ -674,7 +692,7 @@ async function* queryLoop(
               toolChoice: undefined,
               isNonInteractiveSession:
                 toolUseContext.options.isNonInteractiveSession,
-              fallbackModel,
+              fallbackModel: nextFallbackHop,
               onStreamingFallback: () => {
                 streamingFallbackOccured = true
               },
@@ -891,12 +909,14 @@ async function* queryLoop(
             }
           }
         } catch (innerError) {
-          if (innerError instanceof FallbackTriggeredError && fallbackModel) {
-            // Fallback was triggered - switch model and retry
-            currentModel = fallbackModel
+          if (
+            innerError instanceof FallbackTriggeredError &&
+            fallbackChain[fallbackHop + 1]
+          ) {
+            fallbackHop++
+            currentModel = fallbackChain[fallbackHop] ?? currentModel
             attemptWithFallback = true
 
-            // Clear assistant messages since we'll retry the entire request
             yield* yieldMissingToolResultBlocks(
               assistantMessages,
               'Model fallback triggered',
@@ -906,9 +926,6 @@ async function* queryLoop(
             toolUseBlocks.length = 0
             needsFollowUp = false
 
-            // Discard pending results from the failed attempt and create a
-            // fresh executor. This prevents orphan tool_results (with old
-            // tool_use_ids) from leaking into the retry.
             if (streamingToolExecutor) {
               streamingToolExecutor.discard()
               streamingToolExecutor = new StreamingToolExecutor(
@@ -918,22 +935,15 @@ async function* queryLoop(
               )
             }
 
-            // Update tool use context with new model
-            toolUseContext.options.mainLoopModel = fallbackModel
-
-            // Thinking signatures are model-bound: replaying a protected-thinking
-            // block (e.g. capybara) to an unprotected fallback (e.g. opus) 400s.
-            // Strip before retry so the fallback model gets clean history.
             if (process.env.USER_TYPE === 'ant') {
               messagesForQuery = stripSignatureBlocks(messagesForQuery)
             }
 
-            // Log the fallback event
             logEvent('tengu_model_fallback_triggered', {
               original_model:
                 innerError.originalModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
               fallback_model:
-                fallbackModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+                currentModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
               entrypoint:
                 'cli' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
               queryChainId: queryChainIdForAnalytics,

@@ -135,6 +135,9 @@ export type ToolPermissionContext = DeepImmutable<{
   awaitAutomatedChecksBeforeDialog?: boolean
   /** Stores the permission mode before model-initiated plan mode entry, so it can be restored on exit */
   prePlanMode?: PermissionMode
+  /** --restricted: confine file tools to cwd/--add-dir and refuse bypass. */
+  restricted?: boolean
+  blockReadsOutsideWorkingDirectories?: boolean
 }>
 
 export const getEmptyToolPermissionContext: () => ToolPermissionContext =

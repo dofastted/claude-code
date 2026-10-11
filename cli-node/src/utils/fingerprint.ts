@@ -8,27 +8,31 @@ import type { AssistantMessage, UserMessage } from '../types/message.js'
 export const FINGERPRINT_SALT = '59cf53e54c78'
 
 /**
- * Extracts text content from the first user message.
- *
- * @param messages - Array of internal message types
- * @returns First text content, or empty string if not found
+ * Extracts text content from the first non-meta user message.
+ * Official goe (2.1.293) skips `isMeta` so synthetic ticks/caveats
+ * cannot own the attribution fingerprint. Hash formula is unchanged.
  */
 export function extractFirstMessageText(
   messages: (UserMessage | AssistantMessage)[],
 ): string {
-  const firstUserMessage = messages.find(msg => msg.type === 'user')
+  const firstUserMessage = messages.find(msg => {
+    const row = msg as { type?: string; isMeta?: boolean }
+    return row.type === 'user' && !row.isMeta
+  }) as { message?: { content?: unknown } } | undefined
   if (!firstUserMessage) {
     return ''
   }
 
-  const content = firstUserMessage.message.content
+  const content = firstUserMessage.message?.content
 
   if (typeof content === 'string') {
     return content
   }
 
   if (Array.isArray(content)) {
-    const textBlock = content.find(block => block.type === 'text')
+    const textBlock = content.find(
+      (block: { type?: string }) => block.type === 'text',
+    ) as { type: 'text'; text: string } | undefined
     if (textBlock && textBlock.type === 'text') {
       return textBlock.text
     }

@@ -15,6 +15,7 @@ import {
 } from '../../utils/config.js'
 import { getCwd } from '../../utils/cwd.js'
 import { logForDebugging } from '../../utils/debug.js'
+import { isCustomizationDisabled } from '../../utils/envUtils.js'
 import { getErrnoCode } from '../../utils/errors.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
 import { safeParseJSON } from '../../utils/json.js'
@@ -1033,9 +1034,12 @@ export function getMcpConfigsByScope(
 export function getMcpConfigByName(name: string): ScopedMcpServerConfig | null {
   const { servers: enterpriseServers } = getMcpConfigsByScope('enterprise')
 
-  // When MCP is locked to plugin-only, only enterprise servers are reachable
-  // by name. User/project/local servers are blocked — same as getClaudeCodeMcpConfigs().
-  if (isRestrictedToPluginOnly('mcp')) {
+  // Official tG: qr("mcpAutoDiscovered") skips user/project/local lookup.
+  // Keep enterprise/managed-mcp.json so admin policy remains reachable by name.
+  if (
+    isCustomizationDisabled('mcpAutoDiscovered') ||
+    isRestrictedToPluginOnly('mcp')
+  ) {
     return enterpriseServers[name] ?? null
   }
 
@@ -1093,6 +1097,9 @@ export async function getClaudeCodeMcpConfigs(
     }
 
     return { servers: filtered, errors: [] }
+  }
+  if (isCustomizationDisabled('mcpAutoDiscovered')) {
+    return { servers: {}, errors: [] }
   }
 
   // Load other scopes — unless the managed policy locks MCP to plugin-only.
@@ -1260,7 +1267,10 @@ export async function getAllMcpConfigs(): Promise<{
   errors: PluginError[]
 }> {
   // In enterprise mode, don't load claude.ai servers (enterprise has exclusive control)
-  if (doesEnterpriseMcpConfigExist()) {
+  if (
+    doesEnterpriseMcpConfigExist() ||
+    isCustomizationDisabled('mcpClaudeAi')
+  ) {
     return getClaudeCodeMcpConfigs()
   }
 

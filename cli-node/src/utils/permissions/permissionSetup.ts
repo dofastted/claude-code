@@ -80,6 +80,28 @@ import {
   permissionRuleValueFromString,
   permissionRuleValueToString,
 } from './permissionRuleParser.js'
+import { restrictedToolsToDisallow } from './restrictedMode.js'
+import {
+  mapProactivityLevelToPermissionMode,
+  permissionModeCapabilitiesFromContext,
+  selectProactivityPermissionMode,
+  type SelectProactivityPermissionModeInput,
+  type SelectProactivityPermissionModeResult,
+} from './proactivityPermissionMode.js'
+
+export {
+  PROACTIVITY_ASK_UNAVAILABLE_NOTIFICATION,
+  PROACTIVITY_LEVELS,
+  isProactivityLevel,
+  isProactivitySelectorAvailable,
+  isRemoteThinClientSession,
+  selectProactivityPermissionMode,
+} from './proactivityPermissionMode.js'
+export type {
+  ProactivityLevel,
+  SelectProactivityPermissionModeInput,
+  SelectProactivityPermissionModeResult,
+} from './proactivityPermissionMode.js'
 
 /**
  * Checks if a Bash permission rule is dangerous for auto mode.
@@ -684,41 +706,68 @@ function isSymlinkTo({
 }
 
 /**
+ * Explicit `--permission-mode auto` (and inherit/settings auto) must parse,
+ * but must not enter auto when the classifier is off or the circuit breaker
+ * is cached-disabled. Occupies the ordered-mode slot with default so settings
+ * cannot silently replace an explicit auto request.
+ */
+function resolveAutoModeCandidate(circuitBroken: boolean): {
+  mode: PermissionMode
+  notification?: string
+} {
+  if (!feature('TRANSCRIPT_CLASSIFIER')) {
+    logForDebugging(
+      'auto mode requested but TRANSCRIPT_CLASSIFIER is off — falling back to default',
+      { level: 'warn' },
+    )
+    return {
+      mode: 'default',
+      notification: getAutoModeUnavailableNotification('unavailable'),
+    }
+  }
+  if (circuitBroken) {
+    logForDebugging(
+      'auto mode circuit breaker active (cached) — falling back to default',
+      { level: 'warn' },
+    )
+    return {
+      mode: 'default',
+      notification: getAutoModeUnavailableNotification('circuit-breaker'),
+    }
+  }
+  return { mode: 'auto' }
+}
+
+/**
  * Safely convert CLI flags to a PermissionMode
  */
 export function initialPermissionModeFromCLI({
   permissionModeCli,
+  inheritPermissionModeCli,
   dangerouslySkipPermissions,
 }: {
   permissionModeCli: string | undefined
+  inheritPermissionModeCli?: string
   dangerouslySkipPermissions: boolean | undefined
 }): { mode: PermissionMode; notification?: string } {
   const settings = getSettings_DEPRECATED() || {}
 
-  // Check GrowthBook gate first - highest precedence
   const growthBookDisableBypassPermissionsMode =
     checkStatsigFeatureGate_CACHED_MAY_BE_STALE(
       'tengu_disable_bypass_permissions_mode',
     )
 
-  // Then check settings - lower precedence
   const settingsDisableBypassPermissionsMode =
     settings.permissions?.disableBypassPermissionsMode === 'disable'
 
-  // Statsig gate takes precedence over settings
   const disableBypassPermissionsMode =
     growthBookDisableBypassPermissionsMode ||
     settingsDisableBypassPermissionsMode
 
-  // Sync circuit-breaker check (cached GB read). Prevents the
-  // AutoModeOptInDialog from showing in showSetupScreens() when auto can't
-  // actually be entered. autoModeFlagCli still carries intent through to
-  // verifyAutoModeGateAccess, which notifies the user why.
   const autoModeCircuitBrokenSync = feature('TRANSCRIPT_CLASSIFIER')
     ? getAutoModeEnabledStateIfCached() === 'disabled'
     : false
 
-  // Modes in order of priority
   const orderedModes: PermissionMode[] = []
   let notification: string | undefined
 
@@ -726,25 +775,16 @@ export function initialPermissionModeFromCLI({
     orderedModes.push('bypassPermissions')
   }
   if (permissionModeCli) {
-    const parsedMode = permissionModeFromString(permissionModeCli)
-    if (feature('TRANSCRIPT_CLASSIFIER') && parsedMode === 'auto') {
-      if (autoModeCircuitBrokenSync) {
-        logForDebugging(
-          'auto mode circuit breaker active (cached) — falling back to default',
-          { level: 'warn' },
-        )
-      } else {
-        orderedModes.push('auto')
-      }
+    if (permissionModeCli === 'auto') {
+      const resolved = resolveAutoModeCandidate(autoModeCircuitBrokenSync)
+      orderedModes.push(resolved.mode)
+      notification ??= resolved.notification
     } else {
-      orderedModes.push(parsedMode)
+      orderedModes.push(permissionModeFromString(permissionModeCli))
     }
   }
   if (settings.permissions?.defaultMode) {
     const settingsMode = settings.permissions.defaultMode as PermissionMode
-    // CCR only supports acceptEdits and plan — ignore other defaultModes from
-    // settings (e.g. bypassPermissions would otherwise silently grant full
-    // access in a remote environment).
     if (
       isEnvTruthy(process.env.CLAUDE_CODE_REMOTE) &&
       !['acceptEdits', 'plan', 'default'].includes(settingsMode)
@@ -756,19 +796,26 @@ export function initialPermissionModeFromCLI({
       logEvent('tengu_ccr_unsupported_default_mode_ignored', {
         mode: settingsMode as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       })
-    }
-    // auto from settings requires the same gate check as from CLI
-    else if (feature('TRANSCRIPT_CLASSIFIER') && settingsMode === 'auto') {
-      if (autoModeCircuitBrokenSync) {
-        logForDebugging(
-          'auto mode circuit breaker active (cached) — falling back to default',
-          { level: 'warn' },
-        )
-      } else {
+    } else if (settingsMode === 'auto') {
+      const resolved = resolveAutoModeCandidate(autoModeCircuitBrokenSync)
+      if (resolved.mode === 'auto') {
         orderedModes.push('auto')
+      } else {
+        notification ??= resolved.notification
       }
     } else {
       orderedModes.push(settingsMode)
+    }
+  }
+
+  // Inherit is last-priority fill-in: used only when nothing else configured one.
+  if (inheritPermissionModeCli && orderedModes.length === 0) {
+    if (inheritPermissionModeCli === 'auto') {
+      const resolved = resolveAutoModeCandidate(autoModeCircuitBrokenSync)
+      orderedModes.push(resolved.mode)
+      notification ??= resolved.notification
+    } else {
+      orderedModes.push(permissionModeFromString(inheritPermissionModeCli))
     }
   }
 
@@ -788,15 +835,11 @@ export function initialPermissionModeFromCLI({
         })
         notification = 'Bypass permissions mode was disabled by settings'
       }
-      continue // Skip this mode if it's disabled
+      continue
     }
 
-    result = { mode, notification } // Use the first valid mode
+    result = { mode, notification }
     break
-  }
-
-  if (!result) {
-    result = { mode: 'default', notification }
   }
 
   if (!result) {
@@ -808,6 +851,67 @@ export function initialPermissionModeFromCLI({
   }
 
   return result
+}
+
+/**
+ * Apply `--proactivity` to an already-initialized permission context.
+ * Uses ctx.isAutoModeAvailable / isBypassPermissionsModeAvailable rather
+ * than assuming either capability. Explicit CLI/inherit/skip/agent mode
+ * wins; settings baseline does not. Restricted/policy-disabled bypass
+ * cannot be enabled.
+ *
+ * Call AFTER initializeToolPermissionContext (and the restricted ctx
+ * overlay). Parent restamps setSessionBypassPermissionsMode and re-runs
+ * restrictedBypassConflict on the returned mode before the trust dialog.
+ */
+export function applyProactivityPermissionMode(
+  input: SelectProactivityPermissionModeInput,
+): SelectProactivityPermissionModeResult & {
+  context: ToolPermissionContext
+} {
+  const selected = selectProactivityPermissionMode(input)
+  let { mode, notification } = selected
+  const caps = permissionModeCapabilitiesFromContext(input.context)
+
+  if (mode === 'auto' && selected.decidedByProactivityLevel) {
+    if (
+      !feature('TRANSCRIPT_CLASSIFIER') ||
+      !caps.isAutoModeAvailable ||
+      !isAutoModeGateEnabled()
+    ) {
+      const reason: AutoModeUnavailableReason = !feature(
+        'TRANSCRIPT_CLASSIFIER',
+      )
+        ? 'unavailable'
+        : (getAutoModeUnavailableReason() ?? 'circuit-breaker')
+      mode = mapProactivityLevelToPermissionMode(
+        selected.proactivityLevel ?? 'ask',
+        { ...caps, isAutoModeAvailable: false },
+        input.context.mode,
+      )
+      notification ??= getAutoModeUnavailableNotification(reason)
+    }
+  }
+
+  if (
+    mode === 'bypassPermissions' &&
+    selected.decidedByProactivityLevel &&
+    !caps.isBypassPermissionsModeAvailable
+  ) {
+    mode = mapProactivityLevelToPermissionMode(
+      selected.proactivityLevel ?? 'proactive',
+      { ...caps, isBypassPermissionsModeAvailable: false },
+      input.context.mode,
+    )
+  }
+
+  let context = input.context
+  if (mode !== context.mode) {
+    context = transitionPermissionMode(context.mode, mode, context)
+    context = { ...context, mode }
+  }
+
+  return { ...selected, mode, notification, context }
 }
 
 export function parseToolListFromCLI(tools: string[]): string[] {
@@ -876,6 +980,7 @@ export async function initializeToolPermissionContext({
   permissionMode,
   allowDangerouslySkipPermissions,
   addDirs,
+  restricted = false,
 }: {
   allowedToolsCli: string[]
   disallowedToolsCli: string[]
@@ -883,6 +988,7 @@ export async function initializeToolPermissionContext({
   permissionMode: PermissionMode
   allowDangerouslySkipPermissions: boolean
   addDirs: string[]
+  restricted?: boolean
 }): Promise<{
   toolPermissionContext: ToolPermissionContext
   warnings: string[]
@@ -907,6 +1013,19 @@ export async function initializeToolPermissionContext({
     const allToolNames = getToolsForDefaultPreset()
     const toolsToDisallow = allToolNames.filter(tool => !baseToolsSet.has(tool))
     parsedDisallowedToolsCli = [...parsedDisallowedToolsCli, ...toolsToDisallow]
+  }
+
+  if (restricted) {
+    const named = new Set(
+      (baseToolsCli && baseToolsCli.length > 0
+        ? parseBaseToolsFromCLI(baseToolsCli)
+        : []
+      ).map(normalizeLegacyToolName),
+    )
+    parsedDisallowedToolsCli = [
+      ...parsedDisallowedToolsCli,
+      ...restrictedToolsToDisallow(named),
+    ]
   }
 
   const warnings: string[] = []
@@ -940,7 +1059,8 @@ export async function initializeToolPermissionContext({
     (permissionMode === 'bypassPermissions' ||
       allowDangerouslySkipPermissions) &&
     !growthBookDisableBypassPermissionsMode &&
-    !settingsDisableBypassPermissionsMode
+    !settingsDisableBypassPermissionsMode &&
+    !restricted
 
   // Load all permission rules from disk
   const rulesFromDisk = loadAllPermissionRulesFromDisk()
@@ -983,6 +1103,12 @@ export async function initializeToolPermissionContext({
       alwaysDenyRules: { cliArg: parsedDisallowedToolsCli },
       alwaysAskRules: {},
       isBypassPermissionsModeAvailable,
+      ...(restricted
+        ? {
+            restricted: true,
+            blockReadsOutsideWorkingDirectories: true,
+          }
+        : {}),
       ...(feature('TRANSCRIPT_CLASSIFIER')
         ? { isAutoModeAvailable: isAutoModeGateEnabled() }
         : {}),
@@ -992,7 +1118,7 @@ export async function initializeToolPermissionContext({
 
   // Add directories from settings and --add-dir
   const allAdditionalDirectories = [
-    ...(settings.permissions?.additionalDirectories || []),
+    ...(restricted ? [] : settings.permissions?.additionalDirectories || []),
     ...addDirs,
   ]
   // Parallelize fs validation; apply updates serially (cumulative context).
@@ -1042,7 +1168,11 @@ export type AutoModeGateCheckResult = {
   notification?: string
 }
 
-export type AutoModeUnavailableReason = 'settings' | 'circuit-breaker' | 'model'
+export type AutoModeUnavailableReason =
+  | 'settings'
+  | 'circuit-breaker'
+  | 'model'
+  | 'unavailable'
 
 export function getAutoModeUnavailableNotification(
   reason: AutoModeUnavailableReason,
@@ -1057,6 +1187,9 @@ export function getAutoModeUnavailableNotification(
       break
     case 'model':
       base = 'auto mode unavailable for this model'
+      break
+    case 'unavailable':
+      base = 'auto mode is unavailable'
       break
   }
   return process.env.USER_TYPE === 'ant'

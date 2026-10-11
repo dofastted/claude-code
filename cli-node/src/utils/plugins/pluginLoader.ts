@@ -59,7 +59,7 @@ import type {
   PluginManifest,
 } from '../../types/plugin.js'
 import { logForDebugging } from '../debug.js'
-import { isEnvTruthy } from '../envUtils.js'
+import { isCustomizationDisabled, isEnvTruthy, isSafeMode } from '../envUtils.js'
 import {
   errorMessage,
   getErrnoPath,
@@ -3158,17 +3158,25 @@ async function assemblePluginLoadResult(
     errors: PluginError[]
   }>,
 ): Promise<PluginLoadResult> {
-  // Load marketplace plugins and session-only plugins in parallel.
-  // getInlinePlugins() is a synchronous state read with no dependency on
-  // marketplace loading, so these two sources can be fetched concurrently.
+  // Official Msr/CQe: qr("plugins", {explicitlyRequested: --plugin-dir}).
+  // Safe never traverses installed or session plugins; builtins still load.
   const inlinePlugins = getInlinePlugins()
+  const skipInstalled = isCustomizationDisabled('plugins', {
+    explicitlyRequested: inlinePlugins.length > 0,
+  })
+  if (skipInstalled && isSafeMode()) {
+    logForDebugging(
+      'Safe mode: installed plugins are disabled, none of their hooks or hooks modules load; built-in plugins load regardless',
+    )
+  }
   const [marketplaceResult, sessionResult] = await Promise.all([
-    marketplaceLoader(),
-    inlinePlugins.length > 0
+    skipInstalled
+      ? Promise.resolve({ plugins: [] as LoadedPlugin[], errors: [] as PluginError[] })
+      : marketplaceLoader(),
+    !skipInstalled && inlinePlugins.length > 0
       ? loadSessionOnlyPlugins(inlinePlugins)
       : Promise.resolve({ plugins: [], errors: [] }),
   ])
-  // 3. Load built-in plugins that ship with the CLI
   const builtinResult = getBuiltinPlugins()
 
   // Session plugins (--plugin-dir) override installed ones by name,

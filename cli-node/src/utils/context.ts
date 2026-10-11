@@ -4,6 +4,7 @@ import { getGlobalConfig } from './config.js'
 import { isEnvTruthy } from './envUtils.js'
 import { getCanonicalName } from './model/model.js'
 import { getModelCapability } from './model/modelCapabilities.js'
+import { resolveAntModel } from './model/antModels.js'
 
 // Model context window size (200k tokens for all models right now)
 export const MODEL_CONTEXT_WINDOW_DEFAULT = 200_000
@@ -46,6 +47,19 @@ export function modelSupports1M(model: string): boolean {
   }
   const canonical = getCanonicalName(model)
   return canonical.includes('claude-sonnet-4') || canonical.includes('opus-4-6')
+}
+
+/** Catalog native_1m: public 5.x windows are 1M without a [1m] suffix. */
+export function modelHasNative1M(model: string): boolean {
+  if (is1mContextDisabled()) {
+    return false
+  }
+  const canonical = getCanonicalName(model)
+  return (
+    canonical.includes('haiku-5') ||
+    canonical.includes('sonnet-5') ||
+    canonical.includes('opus-5')
+  )
 }
 
 export function getContextWindowForModel(
@@ -93,6 +107,9 @@ export function getContextWindowForModel(
     if (antModel?.contextWindow) {
       return antModel.contextWindow
     }
+  }
+  if (modelHasNative1M(model)) {
+    return 1_000_000
   }
   return MODEL_CONTEXT_WINDOW_DEFAULT
 }
@@ -164,13 +181,18 @@ export function getModelMaxOutputTokens(model: string): {
 
   const m = getCanonicalName(model)
 
-  if (m.includes('sonnet-5-5')) {
+  if (
+    m.includes('haiku-5') ||
+    m.includes('sonnet-5-5') ||
+    m.includes('opus-5-5')
+  ) {
     defaultTokens = 128_000
     upperLimit = 128_000
-  } else if (m.includes('sonnet-5')) {
-    defaultTokens = 64_000
-    upperLimit = 128_000
-  } else if (m.includes('opus-4-6')) {
+  } else if (
+    m.includes('sonnet-5') ||
+    m.includes('opus-5') ||
+    m.includes('opus-4-6')
+  ) {
     defaultTokens = 64_000
     upperLimit = 128_000
   } else if (m.includes('sonnet-4-6')) {

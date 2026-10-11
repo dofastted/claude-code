@@ -34,6 +34,15 @@ export const CLAUDE_HAIKU_4_5_CONFIG = {
   foundry: 'claude-haiku-4-5',
 } as const satisfies ModelConfig
 
+// Explicit 5.5 IDs exist on every gateway. Alias fallback (haiku→4.5 on 3P)
+// lives in getDefaultHaikuModel, not here.
+export const CLAUDE_HAIKU_5_5_CONFIG = {
+  firstParty: 'claude-haiku-5-5',
+  bedrock: 'us.anthropic.claude-haiku-5-5',
+  vertex: 'claude-haiku-5-5',
+  foundry: 'claude-haiku-5-5',
+} as const satisfies ModelConfig
+
 export const CLAUDE_SONNET_4_CONFIG = {
   firstParty: 'claude-sonnet-4-20250514',
   bedrock: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
@@ -83,7 +92,7 @@ export const CLAUDE_SONNET_4_6_CONFIG = {
   foundry: 'claude-sonnet-4-6',
 } as const satisfies ModelConfig
 
-// 2.1.284 first-party default is Sonnet 5.5. 3P falls back to Sonnet 5.
+// Explicit Sonnet 5 IDs (not the sonnet alias, which 3P-falls back to 4.5).
 export const CLAUDE_SONNET_5_CONFIG = {
   firstParty: 'claude-sonnet-5',
   bedrock: 'us.anthropic.claude-sonnet-5',
@@ -94,21 +103,22 @@ export const CLAUDE_SONNET_5_CONFIG = {
 export const CLAUDE_SONNET_5_5_CONFIG = {
   firstParty: 'claude-sonnet-5-5',
   bedrock: 'us.anthropic.claude-sonnet-5-5',
-  vertex: 'claude-sonnet-5',
-  foundry: 'claude-sonnet-5',
+  vertex: 'claude-sonnet-5-5',
+  foundry: 'claude-sonnet-5-5',
 } as const satisfies ModelConfig
 
 export const CLAUDE_OPUS_5_5_CONFIG = {
   firstParty: 'claude-opus-5-5',
-  bedrock: 'us.anthropic.claude-opus-4-6-v1',
-  vertex: 'claude-opus-4-6',
-  foundry: 'claude-opus-4-6',
+  bedrock: 'us.anthropic.claude-opus-5-5',
+  vertex: 'claude-opus-5-5',
+  foundry: 'claude-opus-5-5',
 } as const satisfies ModelConfig
 
 // @[MODEL LAUNCH]: Register the new config here.
 export const ALL_MODEL_CONFIGS = {
   haiku35: CLAUDE_3_5_HAIKU_CONFIG,
   haiku45: CLAUDE_HAIKU_4_5_CONFIG,
+  haiku55: CLAUDE_HAIKU_5_5_CONFIG,
   sonnet35: CLAUDE_3_5_V2_SONNET_CONFIG,
   sonnet37: CLAUDE_3_7_SONNET_CONFIG,
   sonnet40: CLAUDE_SONNET_4_CONFIG,

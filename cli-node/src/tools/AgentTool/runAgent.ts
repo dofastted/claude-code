@@ -3,6 +3,7 @@ import type { UUID } from 'crypto'
 import { randomUUID } from 'crypto'
 import uniqBy from 'lodash-es/uniqBy.js'
 import { logForDebugging } from 'src/utils/debug.js'
+import { isCustomizationDisabled, isSafeMode } from 'src/utils/envUtils.js'
 import { getProjectRoot, getSessionId } from '../../bootstrap/state.js'
 import { getCommand, getSkillToolCommands, hasCommand } from '../../commands.js'
 import {
@@ -118,6 +119,18 @@ async function initializeAgentMcpServers(
   if (isRestrictedToPluginOnly('mcp') && !agentIsAdminTrusted) {
     logForDebugging(
       `[Agent: ${agentDefinition.agentType}] Skipping MCP servers: strictPluginOnlyCustomization locks MCP to plugin-only (agent source: ${agentDefinition.source})`,
+    )
+    return {
+      clients: parentClients,
+      tools: [],
+      cleanup: async () => {},
+    }
+  }
+  if (isCustomizationDisabled('mcpAgentFrontmatter')) {
+    const reason = isSafeMode() ? '--safe-mode' : '--bare'
+    logForDebugging(
+      `[Agent: ${agentDefinition.agentType}] Skipping frontmatter MCP servers: blocked by ${reason} (agent source: ${agentDefinition.source})`,
+      { level: 'warn' },
     )
     return {
       clients: parentClients,

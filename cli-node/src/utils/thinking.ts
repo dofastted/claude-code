@@ -4,12 +4,15 @@ import { feature } from 'bun:bundle'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import { getCanonicalName } from './model/model.js'
 import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
+import { resolveAntModel } from './model/antModels.js'
 import { getAPIProvider } from './model/providers.js'
 import { getSettingsWithErrors } from './settings/settings.js'
 
+export type ThinkingDisplay = 'summarized' | 'omitted'
+
 export type ThinkingConfig =
-  | { type: 'adaptive'; display?: string }
-  | { type: 'enabled'; budgetTokens: number }
+  | { type: 'adaptive'; display?: ThinkingDisplay }
+  | { type: 'enabled'; budgetTokens: number; display?: ThinkingDisplay }
   | { type: 'disabled' }
 
 /**
@@ -105,8 +108,15 @@ export function modelSupportsThinking(model: string): boolean {
   if (provider === 'foundry' || provider === 'firstParty') {
     return !canonical.includes('claude-3-')
   }
-  // 3P (Bedrock/Vertex): only Opus 4+ and Sonnet 4+
-  return canonical.includes('sonnet-4') || canonical.includes('opus-4')
+  // 3P (Bedrock/Vertex): Opus/Sonnet 4+ and 5.x, plus Haiku 4.5+
+  return (
+    canonical.includes('sonnet-4') ||
+    canonical.includes('opus-4') ||
+    canonical.includes('sonnet-5') ||
+    canonical.includes('opus-5') ||
+    canonical.includes('haiku-4') ||
+    canonical.includes('haiku-5')
+  )
 }
 
 // @[MODEL LAUNCH]: Add the new model to the allowlist if it supports adaptive thinking.
@@ -116,29 +126,28 @@ export function modelSupportsAdaptiveThinking(model: string): boolean {
     return supported3P
   }
   const canonical = getCanonicalName(model)
-  // Supported by a subset of Claude 4 models
-  if (canonical.includes('opus-4-6') || canonical.includes('sonnet-4-6')) {
-    return true
+  // Official Vlo denylist: 3.x and older 4.x that never learned adaptive thinking.
+  if (
+    canonical.includes('claude-3-') ||
+    canonical === 'claude-opus-4' ||
+    canonical === 'claude-opus-4-1' ||
+    canonical === 'claude-opus-4-5' ||
+    canonical === 'claude-sonnet-4' ||
+    canonical === 'claude-sonnet-4-5' ||
+    canonical === 'claude-haiku-4-5'
+  ) {
+    return false
   }
-  // Exclude any other known legacy models (allowlist above catches 4-6 variants first)
   if (
     canonical.includes('opus') ||
     canonical.includes('sonnet') ||
     canonical.includes('haiku')
   ) {
-    return false
+    return true
   }
   // IMPORTANT: Do not change adaptive thinking support without notifying the
   // model launch DRI and research. This can greatly affect model quality and
   // bashing.
-
-  // Newer models (4.6+) are all trained on adaptive thinking and MUST have it
-  // enabled for model testing. DO NOT default to false for first party, otherwise
-  // we may silently degrade model quality.
-
-  // Default to true for unknown model strings on 1P and Foundry (because Foundry
-  // is a proxy). Do not default to true for other 3P as they have different formats
-  // for their model strings.
   const provider = getAPIProvider()
   return provider === 'firstParty' || provider === 'foundry'
 }
@@ -159,4 +168,89 @@ export function shouldEnableThinkingByDefault(): boolean {
 
   // Enable thinking by default unless explicitly disabled.
   return true
+}
+
+/** Canonical IDs that still accept a request temperature (official ihr→cr vs opus-4-7). */
+const TEMPERATURE_ACCEPTED_CANONICALS: Record<string, true> = {
+  'claude-opus-4': true,
+  'claude-sonnet-4': true,
+  'claude-opus-4-1': true,
+  'claude-sonnet-4-5': true,
+  'claude-haiku-4-5': true,
+  'claude-opus-4-5': true,
+  'claude-opus-4-6': true,
+  'claude-sonnet-4-6': true,
+}
+
+/**
+ * Official ZTe: models that reject `thinking: { type: 'disabled' }`.
+ * Public 5.5 is true on 1P/foundry; 4.x through opus-5 / sonnet-5 are false.
+ */
+export function modelRejectsDisabledThinking(model: string): boolean {
+  const supported3P = get3PModelCapabilityOverride(
+    model,
+    'rejects_disabled_thinking',
+  )
+  if (supported3P !== undefined) {
+    return supported3P
+  }
+  const canonical = getCanonicalName(model)
+  if (
+    canonical.includes('claude-3-') ||
+    canonical === 'claude-opus-4' ||
+    canonical === 'claude-opus-4-1' ||
+    canonical === 'claude-opus-4-5' ||
+    canonical === 'claude-opus-4-6' ||
+    canonical === 'claude-opus-4-7' ||
+    canonical === 'claude-opus-4-8' ||
+    canonical === 'claude-opus-5' ||
+    canonical === 'claude-sonnet-4' ||
+    canonical === 'claude-sonnet-4-5' ||
+    canonical === 'claude-sonnet-4-6' ||
+    canonical === 'claude-sonnet-5' ||
+    canonical === 'claude-haiku-4-5'
+  ) {
+    return false
+  }
+  if (
+    canonical === 'claude-haiku-5-5' ||
+    canonical === 'claude-sonnet-5-5' ||
+    canonical === 'claude-opus-5-5'
+  ) {
+    return true
+  }
+  const provider = getAPIProvider()
+  return provider === 'firstParty' || provider === 'foundry'
+}
+
+/**
+ * Official ihr: 3P override, else cr(canonical, 'claude-opus-4-7').
+ * 5.x is not in Nv so it does not accept temperature.
+ */
+export function modelAcceptsTemperature(model: string): boolean {
+  const supported3P = get3PModelCapabilityOverride(model, 'temperature')
+  if (supported3P !== undefined) {
+    return supported3P
+  }
+  const canonical = getCanonicalName(model)
+  if (canonical.includes('claude-3-')) {
+    return true
+  }
+  return TEMPERATURE_ACCEPTED_CANONICALS[canonical] === true
+}
+
+/**
+ * Default thinking config when no request-latch override exists.
+ * Official pCt without a latch is adaptive when thinking is on.
+ */
+export function getDefaultThinkingConfig(
+  _model: string,
+  opts?: { display?: ThinkingDisplay },
+): ThinkingConfig {
+  if (!shouldEnableThinkingByDefault()) {
+    return { type: 'disabled' }
+  }
+  return opts?.display !== undefined
+    ? { type: 'adaptive', display: opts.display }
+    : { type: 'adaptive' }
 }

@@ -1175,8 +1175,21 @@ export function checkReadPermissionForTool(
     }
   }
 
-  // 12. Default to asking for permission
-  // At this point, isInWorkingDir is false (from step #6), so path is outside working directories
+  // 12. Restricted / blockReadsOutsideWorkingDirectories: deny, do not ask.
+  if (
+    toolPermissionContext.restricted ||
+    toolPermissionContext.blockReadsOutsideWorkingDirectories
+  ) {
+    return {
+      behavior: 'deny',
+      message: `Path is outside allowed working directories: ${path}`,
+      decisionReason: {
+        type: 'workingDir',
+        reason: 'Path is outside allowed working directories',
+      },
+    }
+  }
+
   return {
     behavior: 'ask',
     message: `Claude requested permissions to read from ${path}, but you haven't granted it yet.`,
@@ -1388,6 +1401,21 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
       decisionReason: {
         type: 'rule',
         rule: allowRule,
+      },
+    }
+  }
+
+  if (
+    !isInWorkingDir &&
+    (toolPermissionContext.restricted ||
+      toolPermissionContext.blockReadsOutsideWorkingDirectories)
+  ) {
+    return {
+      behavior: 'deny',
+      message: `Path is outside allowed working directories: ${path}`,
+      decisionReason: {
+        type: 'workingDir',
+        reason: 'Path is outside allowed working directories',
       },
     }
   }

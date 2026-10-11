@@ -10,6 +10,7 @@ import {
   COST_TIER_3_15,
   COST_HAIKU_35,
   COST_HAIKU_45,
+  COST_HAIKU_55,
   formatModelPricing,
 } from '../modelCost.js'
 import { getSettings_DEPRECATED } from '../settings/settings.js'
@@ -178,6 +179,17 @@ function getCustomHaikuOption(): ModelOption | undefined {
   }
 }
 
+function getHaiku55Option(): ModelOption {
+  const is3P = getAPIProvider() !== 'firstParty'
+  return {
+    value: 'haiku',
+    label: 'Haiku',
+    description: `Haiku 5.5 · Fastest for quick answers${is3P ? '' : ` · ${formatModelPricing(COST_HAIKU_55)}`}`,
+    descriptionForModel:
+      'Haiku 5.5 - fastest for quick answers. Native 1M context. Lower cost but less capable than Sonnet 5.5.',
+  }
+}
+
 function getHaiku45Option(): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
   return {
@@ -201,8 +213,8 @@ function getHaiku35Option(): ModelOption {
 }
 
 function getHaikuOption(): ModelOption {
-  // Return correct Haiku option based on provider
   const haikuModel = getDefaultHaikuModel()
+  if (haikuModel === getModelStrings().haiku55) return getHaiku55Option()
   return haikuModel === getModelStrings().haiku45
     ? getHaiku45Option()
     : getHaiku35Option()
@@ -389,6 +401,7 @@ function getModelFamilyInfo(
 
   // Sonnet family
   if (
+    canonical.includes('claude-sonnet-5') ||
     canonical.includes('claude-sonnet-4-6') ||
     canonical.includes('claude-sonnet-4-5') ||
     canonical.includes('claude-sonnet-4-') ||
@@ -402,7 +415,7 @@ function getModelFamilyInfo(
   }
 
   // Opus family
-  if (canonical.includes('claude-opus-4')) {
+  if (canonical.includes('claude-opus-5') || canonical.includes('claude-opus-4')) {
     const currentName = getMarketingNameForModel(getDefaultOpusModel())
     if (currentName) {
       return { alias: 'Opus', currentVersionName: currentName }

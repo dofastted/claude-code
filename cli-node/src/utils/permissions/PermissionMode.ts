@@ -115,9 +115,38 @@ export function toExternalPermissionMode(
 }
 
 export function permissionModeFromString(str: string): PermissionMode {
+  if (str === 'manual') return 'default'
   return (PERMISSION_MODES as readonly string[]).includes(str)
     ? (str as PermissionMode)
     : 'default'
+}
+
+/** CLI choices: official advertises `manual` in place of `default`. */
+/** `auto` is always accepted by the parser even when TRANSCRIPT_CLASSIFIER is off. */
+export const PERMISSION_MODE_CLI_CHOICES = [
+  ...PERMISSION_MODES.map(mode => (mode === 'default' ? 'manual' : mode)),
+  ...((PERMISSION_MODES as readonly string[]).includes('auto')
+    ? []
+    : (['auto'] as const)),
+] as const
+
+/**
+ * Commander parser: accepts both `manual` and `default`, plus every
+ * user-addressable PermissionMode, and `auto` even when the classifier
+ * runtime set does not include it. Throws on unknown values. Callers must
+ * still refuse to *enter* auto when the classifier/gate is unavailable.
+ */
+export function parsePermissionModeCli(value: string): string {
+  if (
+    value !== 'manual' &&
+    value !== 'auto' &&
+    !(PERMISSION_MODES as readonly string[]).includes(value)
+  ) {
+    throw new Error(
+      `Allowed choices are ${PERMISSION_MODE_CLI_CHOICES.join(', ')}.`,
+    )
+  }
+  return value
 }
 
 export function permissionModeTitle(mode: PermissionMode): string {

@@ -9,7 +9,7 @@ import {
 } from '../argumentSubstitution.js'
 import { logForDebugging } from '../debug.js'
 import { EFFORT_LEVELS, parseEffortValue } from '../effort.js'
-import { isBareMode } from '../envUtils.js'
+import { isCustomizationDisabled } from '../envUtils.js'
 import { isENOENT } from '../errors.js'
 import {
   coerceDescriptionToString,
@@ -412,11 +412,14 @@ function createPluginCommand(
 }
 
 export const getPluginCommands = memoize(async (): Promise<Command[]> => {
-  // --bare: skip marketplace plugin auto-load. Explicit --plugin-dir still
-  // works — getInlinePlugins() is set by main.tsx from --plugin-dir.
-  // loadAllPluginsCacheOnly already short-circuits to inline-only when
-  // inlinePlugins.length > 0.
-  if (isBareMode() && getInlinePlugins().length === 0) {
+  // Official CQe: qr("plugins", {explicitlyRequested: --plugin-dir/handed-in}).
+  // Safe ignores the hatch. Built-in plugin skills come from
+  // getBuiltinPluginSkillCommands, not this loader.
+  if (
+    isCustomizationDisabled('plugins', {
+      explicitlyRequested: getInlinePlugins().length > 0,
+    })
+  ) {
     return []
   }
   // Only load commands from enabled plugins
@@ -838,9 +841,12 @@ async function loadSkillsFromDirectory(
 }
 
 export const getPluginSkills = memoize(async (): Promise<Command[]> => {
-  // --bare: same gate as getPluginCommands above — honor explicit
-  // --plugin-dir, skip marketplace auto-load.
-  if (isBareMode() && getInlinePlugins().length === 0) {
+  // Official cbn: same qr("plugins") gate as getPluginCommands.
+  if (
+    isCustomizationDisabled('plugins', {
+      explicitlyRequested: getInlinePlugins().length > 0,
+    })
+  ) {
     return []
   }
   // Only load skills from enabled plugins

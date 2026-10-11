@@ -1,12 +1,9 @@
 /**
- * 2.1.280 main Messages betas from the linux-x64 sdk-cli capture.
- * Order is the wire order, not "append whatever the fork omitted".
- * 2.1.280 sends advanced-tool-use and thinking-binding-controls together,
- * and adds mid-conversation-system-clear-at.
- * Do not add context-1m here — inbound `[1m]` / matrix owns that.
- * Outbound UA/cc_version use officialCliVersion() (2.1.280), not package.json.
+ * Claude Code 2.1.293 first-party Messages wire order.
+ * Field-gated betas are added from each request, not process-wide defaults.
+ * OAuth is retained only when the credential's base list declares it.
  */
-export const KIN_OFFICIAL_MESSAGE_BETAS = [
+export const OFFICIAL_MESSAGE_BETAS = [
   'claude-code-20250219',
   'oauth-2025-04-20',
   'interleaved-thinking-2025-05-14',
@@ -14,40 +11,24 @@ export const KIN_OFFICIAL_MESSAGE_BETAS = [
   'context-management-2025-06-27',
   'prompt-caching-scope-2026-01-05',
   'mid-conversation-system-2026-04-07',
-  'advanced-tool-use-2025-11-20',
-  'mid-conversation-system-clear-at-2026-08-21',
+  'per-turn-control-2026-07-01',
+  'mid-conversation-tool-changes-2026-07-01',
   'effort-2025-11-24',
-  'thinking-binding-controls-2026-08-01',
-  'extended-cache-ttl-2025-04-11',
-  'cache-diagnosis-2026-04-07',
 ] as const
 
-/** Tokens the wrap fork does not emit on its own. Kept for callers that only append. */
-export const KIN_OFFICIAL_EXTRA_BETAS = [
+/** Common first-party tokens absent from the fork's base model list. */
+export const OFFICIAL_EXTRA_BETAS = [
   'thinking-token-count-2026-05-13',
   'mid-conversation-system-2026-04-07',
-  'advanced-tool-use-2025-11-20',
-  'mid-conversation-system-clear-at-2026-08-21',
-  'thinking-binding-controls-2026-08-01',
-  'extended-cache-ttl-2025-04-11',
-  'cache-diagnosis-2026-04-07',
 ] as const
-
-/** Server-side auto mode review. Never part of the default mimicry list. */
-export const AFK_MODE_SERVER_BETA = 'afk-mode-2026-01-31'
-
-export function withServerSafeguardBeta(betas: string[], enabled: boolean): string[] {
-  if (!enabled || betas.includes(AFK_MODE_SERVER_BETA)) return betas
-  return [...betas, AFK_MODE_SERVER_BETA]
-}
 
 export function mergeOfficialExtraBetas(betas: string[]): string[] {
   const have = [...betas]
-  for (const beta of KIN_OFFICIAL_EXTRA_BETAS) {
+  for (const beta of OFFICIAL_EXTRA_BETAS) {
     if (!have.includes(beta)) have.push(beta)
   }
   const out: string[] = []
-  for (const beta of KIN_OFFICIAL_MESSAGE_BETAS) {
+  for (const beta of OFFICIAL_MESSAGE_BETAS) {
     if (have.includes(beta)) out.push(beta)
   }
   for (const beta of have) {

@@ -20,7 +20,10 @@ import type {
 import type { TextBlockParam } from '@anthropic-ai/sdk/resources/index.mjs'
 import type { Stream } from '@anthropic-ai/sdk/streaming.mjs'
 import { randomUUID } from 'crypto'
-import { classifierSystemBlocks, type ClassifierRequestContext } from '../../kin/classifierRequest.js'
+import {
+  classifierSystemBlocks,
+  type ClassifierRequestContext,
+} from '../../kin/classifierRequest.js'
 import {
   getAPIProvider,
   isFirstPartyAnthropicBaseUrl,
@@ -38,7 +41,13 @@ import {
   readPanelCacheTtl,
   resolveKinCacheTtl,
 } from '../../kin/cacheTtl.js'
-import { mergeOfficialExtraBetas, withServerSafeguardBeta } from '../../kin/officialBetas.js'
+import { mergeOfficialExtraBetas } from '../../kin/officialBetas.js'
+import { assembleMessageRequest } from './requestBody.js'
+import { assembleApiMetadata } from '../../kin/officialFingerprint.js'
+import {
+  setupTokenBetaHeader,
+  withRequestProtocolBetas,
+} from '../../../../../src/lib/protocol/claude-code-betas.mjs'
 import { isKinQuerySource } from '../../kin/querySource.js'
 import {
   billingFromSystemPrompt,
@@ -173,9 +182,14 @@ import {
   modelSupportsAdvisor,
 } from 'src/utils/advisor.js'
 import { getAgentContext } from 'src/utils/agentContext.js'
-import { isClaudeAISubscriber } from 'src/utils/auth.js'
+import {
+  hasProfileScope,
+  isAnthropicAuthEnabled,
+  isClaudeAISubscriber,
+} from 'src/utils/auth.js'
 import {
   getToolSearchBetaHeader,
+  modelSupportsISP,
   modelSupportsStructuredOutputs,
   shouldIncludeFirstPartyOnlyBetas,
   shouldUseGlobalCacheScope,
@@ -185,7 +199,12 @@ import { CHROME_TOOL_SEARCH_INSTRUCTIONS } from 'src/utils/claudeInChrome/prompt
 import { getMaxThinkingTokensForModel } from 'src/utils/context.js'
 import { logForDebugging } from 'src/utils/debug.js'
 import { logForDiagnosticsNoPII } from 'src/utils/diagLogs.js'
-import { type EffortValue, modelSupportsEffort } from 'src/utils/effort.js'
+import {
+  effortLevelAboveHigh,
+  modelCapsEffortWhenDisabled,
+  type EffortValue,
+  modelSupportsEffort,
+} from 'src/utils/effort.js'
 import {
   isFastModeAvailable,
   isFastModeCooldown,
@@ -198,6 +217,8 @@ import { isMcpInstructionsDeltaEnabled } from 'src/utils/mcpInstructionsDelta.js
 import { calculateUSDCost } from 'src/utils/modelCost.js'
 import { endQueryProfile, queryCheckpoint } from 'src/utils/queryProfiler.js'
 import {
+  modelAcceptsTemperature,
+  modelRejectsDisabledThinking,
   modelSupportsAdaptiveThinking,
   modelSupportsThinking,
   type ThinkingConfig,
@@ -220,6 +241,7 @@ import { validateBoundedIntEnvVar } from '../../utils/envValidation.js'
 import { safeParseJSON } from '../../utils/json.js'
 import { getInferenceProfileBackingModel } from '../../utils/model/bedrock.js'
 import {
+  getCanonicalName,
   normalizeModelStringForAPI,
   parseUserSpecifiedModel,
 } from '../../utils/model/model.js'
@@ -337,7 +359,7 @@ export function getExtraBodyParams(betaHeaders?: string[]): JsonObject {
       // Add to existing array, avoiding duplicates
       const existingHeaders = result.anthropic_beta as string[]
       const newHeaders = betaHeaders.filter(
-        header => !existingHeaders.includes(header),
+        (header) => !existingHeaders.includes(header),
       )
       result.anthropic_beta = [...existingHeaders, ...newHeaders]
     } else {
@@ -444,7 +466,7 @@ function should1hCacheTTL(querySource?: QuerySource): boolean {
 
   return (
     querySource !== undefined &&
-    allowlist.some(pattern =>
+    allowlist.some((pattern) =>
       pattern.endsWith('*')
         ? querySource.startsWith(pattern.slice(0, -1))
         : querySource === pattern,
@@ -536,20 +558,24 @@ export function getAPIMetadata() {
   }
 
   const sessionId = getSessionId()
-  const parent = getAgentContext()?.parentSessionId || getParentSessionId() || ''
+  const parent =
+    getAgentContext()?.parentSessionId || getParentSessionId() || ''
   const relation =
     parent && parent !== sessionId
       ? { parent_session_id: parent, root_session_id: parent }
       : {}
-  return {
-    user_id: jsonStringify({
-      ...extra,
+  return assembleApiMetadata({
+    extra,
+    identity: {
       device_id: getOrCreateUserID(),
-      account_uuid: getOauthAccountInfo()?.accountUuid ?? '',
+      account_uuid:
+        (isEnvTruthy(process.env.CLAUDE_CODE_REMOTE) &&
+          process.env.CLAUDE_CODE_ACCOUNT_UUID) ||
+        getOauthAccountInfo()?.accountUuid || '',
       session_id: sessionId,
       ...relation,
-    }),
-  }
+    },
+  })
 }
 
 export async function verifyApiKey(
@@ -574,7 +600,7 @@ export async function verifyApiKey(
             model,
             source: 'verify_api_key',
           }),
-        async anthropic => {
+        async (anthropic) => {
           const messages: MessageParam[] = [{ role: 'user', content: 'test' }]
           // biome-ignore lint/plugin: API key verification is intentionally a minimal direct call
           await anthropic.beta.messages.create({
@@ -734,11 +760,11 @@ export type Options = {
   taskBudget?: { total: number; remaining?: number }
   /** Kin cli-hop: caller thinking is forwarded, not rewritten. */
   honorCallerThinking?: boolean
-  thinkingDisplay?: string
   onResponseHeaders?: (headers: globalThis.Headers) => void
   /** Kin cli-hop: raw failure before it is flattened into an assistant error message. */
   onError?: (error: unknown) => void
   wireMessages?: unknown
+  wireBody?: Record<string, unknown>
   /** Caller server-side auto mode review. Absent on ordinary hops. */
   safeguards?: unknown
   outputConfigOverride?: BetaOutputConfig
@@ -845,6 +871,7 @@ export async function* queryKinMessagesWithStreaming({
   model,
   signal,
   wireMessages,
+  wireBody,
   outputConfig,
   safeguards,
   contextManagement,
@@ -867,6 +894,7 @@ export async function* queryKinMessagesWithStreaming({
   model: string
   signal: AbortSignal
   wireMessages?: unknown
+  wireBody?: Record<string, unknown>
   outputConfig?: Record<string, unknown>
   safeguards?: unknown
   contextManagement?: unknown
@@ -903,15 +931,15 @@ export async function* queryKinMessagesWithStreaming({
       isNonInteractiveSession: true,
       hasAppendSystemPrompt: false,
       querySource: 'agent:kin' as QuerySource,
-      agentId: 'kin-slot' as AgentId,
+      agentId: 'slot' as AgentId,
       agents: [],
       mcpTools: [],
       wireMessages,
+      wireBody,
       safeguards,
       outputConfigOverride: outputConfig as BetaOutputConfig | undefined,
       contextManagementOverride: contextManagement,
       honorCallerThinking: true,
-      thinkingDisplay: thinking.type === 'adaptive' ? thinking.display : undefined,
       onResponseHeaders,
       onError,
     },
@@ -1111,21 +1139,21 @@ export function stripExcessMediaItems(
   toRemove -= limit
   if (toRemove <= 0) return messages
 
-  return messages.map(msg => {
+  return messages.map((msg) => {
     if (toRemove <= 0) return msg
     const content = msg.message.content
     if (!Array.isArray(content)) return msg
 
     const before = toRemove
     const stripped = content
-      .map(block => {
+      .map((block) => {
         if (
           toRemove <= 0 ||
           !isToolResult(block) ||
           !Array.isArray(block.content)
         )
           return block
-        const filtered = block.content.filter(n => {
+        const filtered = block.content.filter((n) => {
           if (toRemove > 0 && isMedia(n)) {
             toRemove--
             return false
@@ -1136,7 +1164,7 @@ export function stripExcessMediaItems(
           ? block
           : { ...block, content: filtered }
       })
-      .filter(block => {
+      .filter((block) => {
         if (toRemove > 0 && isMedia(block)) {
           toRemove--
           return false
@@ -1201,12 +1229,13 @@ async function* queryModel(
       : options.model
 
   queryCheckpoint('query_tool_schema_build_start')
-  const isAgenticQuery = !options.requestContext && (
-    options.querySource.startsWith('repl_main_thread') ||
-    options.querySource.startsWith('agent:') ||
-    options.querySource === 'sdk' ||
-    options.querySource === 'hook_agent' ||
-    options.querySource === 'verification_agent')
+  const isAgenticQuery =
+    !options.requestContext &&
+    (options.querySource.startsWith('repl_main_thread') ||
+      options.querySource.startsWith('agent:') ||
+      options.querySource === 'sdk' ||
+      options.querySource === 'hook_agent' ||
+      options.querySource === 'verification_agent')
   let betas = getMergedBetas(options.model, { isAgenticQuery })
   if (isKinQuerySource(options.querySource)) {
     betas = mergeOfficialExtraBetas(betas)
@@ -1299,7 +1328,7 @@ async function* queryModel(
     // to predeclare all deferred tools upfront and removes limits on tool quantity.
     const discoveredToolNames = extractDiscoveredToolNames(messages)
 
-    filteredTools = tools.filter(tool => {
+    filteredTools = tools.filter((tool) => {
       // Always include non-deferred tools
       if (!deferredToolNames.has(tool.name)) return true
       // Always include ToolSearchTool (so it can discover more tools)
@@ -1309,7 +1338,7 @@ async function* queryModel(
     })
   } else {
     filteredTools = tools.filter(
-      t => !toolMatchesName(t, TOOL_SEARCH_TOOL_NAME),
+      (t) => !toolMatchesName(t, TOOL_SEARCH_TOOL_NAME),
     )
   }
 
@@ -1353,7 +1382,7 @@ async function* queryModel(
   // Only gate when an MCP tool will actually render (not defer_loading).
   const needsToolBasedCacheMarker =
     useGlobalCacheFeature &&
-    filteredTools.some(t => t.isMcp === true && !willDefer(t))
+    filteredTools.some((t) => t.isMcp === true && !willDefer(t))
 
   // Ensure prompt_caching_scope beta header is present when global cache is enabled.
   if (
@@ -1375,7 +1404,7 @@ async function* queryModel(
   // ToolSearchTool's prompt can list ALL available MCP tools. The filtering only affects
   // which tools are actually sent to the API, not what the model sees in tool descriptions.
   const toolSchemas = await Promise.all(
-    filteredTools.map(tool =>
+    filteredTools.map((tool) =>
       toolToAPISchema(tool, {
         getToolPermissionContext: options.getToolPermissionContext,
         tools,
@@ -1388,7 +1417,7 @@ async function* queryModel(
   )
 
   if (useToolSearch) {
-    const includedDeferredTools = count(filteredTools, t =>
+    const includedDeferredTools = count(filteredTools, (t) =>
       deferredToolNames.has(t.name),
     )
     logForDebugging(
@@ -1423,7 +1452,7 @@ async function* queryModel(
   // tool inputs, so stripCallerFieldFromAssistantMessage only needs to remove the
   // 'caller' field (not re-normalize inputs).
   if (!useToolSearch) {
-    messagesForAPI = messagesForAPI.map(msg => {
+    messagesForAPI = messagesForAPI.map((msg) => {
       switch (msg.type) {
         case 'user':
           // Strip tool_reference blocks from tool_result content
@@ -1474,7 +1503,7 @@ async function* queryModel(
   // ephemeral prepend (which busts cache whenever the pool changes).
   if (useToolSearch && !isDeferredToolsDeltaEnabled()) {
     const deferredToolList = tools
-      .filter(t => deferredToolNames.has(t.name))
+      .filter((t) => deferredToolNames.has(t.name))
       .map(formatDeferredToolLine)
       .sort()
       .join('\n')
@@ -1493,7 +1522,7 @@ async function* queryModel(
   // these are carried as a client-side block in mcp_instructions_delta
   // (attachments.ts) instead of here. This per-request sys-prompt append
   // busts the prompt cache when chrome connects late.
-  const hasChromeTools = filteredTools.some(t =>
+  const hasChromeTools = filteredTools.some((t) =>
     isToolFromMcpServer(t.name, CLAUDE_IN_CHROME_MCP_SERVER_NAME),
   )
   const injectChromeHere =
@@ -1571,14 +1600,22 @@ async function* queryModel(
 
   const enablePromptCaching =
     options.enablePromptCaching ?? getPromptCachingEnabled(options.model)
-  const system = options.requestContext ? classifierSystemBlocks(options.wireSystem, getAttributionHeader(fingerprint, {
-    ...gates, ...billingIndexes, isSubagent: true, prevReqId: previousRequestId, promptId,
-    turnOrigin: resolveTurnOrigin(options.querySource),
-  })) : buildSystemPromptBlocks(systemPrompt, enablePromptCaching, {
-    skipGlobalCacheForSystemPrompt: needsToolBasedCacheMarker,
-    querySource: options.querySource,
-  })
-  const useBetas = betas.length > 0
+  const system = options.requestContext
+    ? classifierSystemBlocks(
+        options.wireSystem,
+        getAttributionHeader(fingerprint, {
+          ...gates,
+          ...billingIndexes,
+          isSubagent: true,
+          prevReqId: previousRequestId,
+          promptId,
+          turnOrigin: resolveTurnOrigin(options.querySource),
+        }),
+      )
+    : buildSystemPromptBlocks(systemPrompt, enablePromptCaching, {
+        skipGlobalCacheForSystemPrompt: needsToolBasedCacheMarker,
+        querySource: options.querySource,
+      })
 
   // Build minimal context for detailed tracing (when beta tracing is enabled)
   // Note: The actual new_context message extraction is done in sessionTracing.ts using
@@ -1664,7 +1701,7 @@ async function* queryModel(
     // false-positive "tool schemas changed" breaks when tools are discovered or
     // MCP servers reconnect.
     const toolsForCacheDetection = allTools.filter(
-      t => !('defer_loading' in t && t.defer_loading),
+      (t) => !('defer_loading' in t && t.defer_loading),
     )
     // Capture everything that could affect the server-side cache key.
     // Pass latched header values (not live state) so break detection
@@ -1762,13 +1799,14 @@ async function* queryModel(
       ...((options.outputConfigOverride as BetaOutputConfig) ?? {}),
     }
 
-    if (!options.requestContext) configureEffortParams(
-      effort,
-      outputConfig,
-      extraBodyParams,
-      betasParams,
-      options.model,
-    )
+    if (!options.requestContext && !options.wireBody)
+      configureEffortParams(
+        effort,
+        outputConfig,
+        extraBodyParams,
+        betasParams,
+        options.model,
+      )
 
     configureTaskBudgetParams(
       options.taskBudget,
@@ -1790,10 +1828,16 @@ async function* queryModel(
     }
 
     // Retry context gets preference because it tries to course correct if we exceed the context window limit
-    const maxOutputTokens =
-      retryContext?.maxTokensOverride ||
-      options.maxOutputTokensOverride ||
-      getMaxOutputTokensForModel(options.model)
+    const requestedMaxOutputTokens =
+      retryContext?.maxTokensOverride ?? options.maxOutputTokensOverride
+    let maxOutputTokens =
+      requestedMaxOutputTokens ?? getMaxOutputTokensForModel(options.model)
+    if (!options.wireBody && requestedMaxOutputTokens !== undefined) {
+      maxOutputTokens = Math.min(
+        maxOutputTokens,
+        getMaxOutputTokensForModel(options.model),
+      )
+    }
 
     const hasThinking =
       thinkingConfig.type !== 'disabled' &&
@@ -1803,32 +1847,30 @@ async function* queryModel(
     // Kin forwards the caller thinking config. Other queries, including real
     // subagents, keep the adaptive-vs-budget selection below.
     if (options.honorCallerThinking) {
-      if (options.requestContext && (options.wireThinking as { type?: string } | undefined)?.type === 'disabled') {
-        thinking = { type: 'disabled' }
-      } else if (/haiku/i.test(options.model)) {
-        thinking = undefined
-      } else if (thinkingConfig.type === 'adaptive') {
-        thinking = {
-          type: 'adaptive',
-          ...(options.thinkingDisplay
-            ? { display: options.thinkingDisplay }
-            : {}),
-        } as BetaMessageStreamParams['thinking']
-      } else if (thinkingConfig.type === 'enabled') {
-        thinking = {
-          type: 'enabled',
-          budget_tokens: thinkingConfig.budgetTokens,
-        }
-      }
+      // Native jobs already passed model policy in Node. Preserve every wire
+      // thinking field (including display/binding controls), rather than
+      // rebuilding a subset or disabling all Haiku models.
+      thinking = options.wireThinking as BetaMessageStreamParams['thinking']
     } else if (hasThinking && modelSupportsThinking(options.model)) {
+      let useAdaptive = modelSupportsAdaptiveThinking(options.model)
       if (
-        !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING) &&
-        modelSupportsAdaptiveThinking(options.model)
+        useAdaptive &&
+        isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING)
       ) {
-        // For models that support adaptive thinking, always use adaptive
-        // thinking without a budget.
+        const canonical = getCanonicalName(options.model)
+        useAdaptive =
+          !canonical.includes('opus-4-6') && !canonical.includes('sonnet-4-6')
+      }
+      const display =
+        'display' in thinkingConfig &&
+        shouldIncludeFirstPartyOnlyBetas() &&
+        modelSupportsISP(options.model)
+          ? thinkingConfig.display
+          : undefined
+      if (useAdaptive) {
         thinking = {
           type: 'adaptive',
+          ...(display !== undefined && { display }),
         } satisfies BetaMessageStreamParams['thinking']
       } else {
         // For models that do not support adaptive thinking, use the default
@@ -1840,21 +1882,54 @@ async function* queryModel(
         ) {
           thinkingBudget = thinkingConfig.budgetTokens
         }
-        thinkingBudget = Math.min(maxOutputTokens - 1, thinkingBudget)
+        thinkingBudget = Math.max(1024, Math.min(maxOutputTokens - 1, thinkingBudget))
         thinking = {
           budget_tokens: thinkingBudget,
           type: 'enabled',
+          ...(display !== undefined && { display }),
         } satisfies BetaMessageStreamParams['thinking']
       }
+    } else if (
+      thinkingConfig.type === 'disabled' &&
+      getAPIProvider() === 'firstParty' &&
+      !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING) &&
+      modelSupportsThinking(options.model) &&
+      !modelRejectsDisabledThinking(options.model)
+    ) {
+      thinking = { type: 'disabled' }
     }
 
-    const contextManagement =
-      options.contextManagementOverride ??
-      (options.requestContext ? undefined : getAPIContextManagement({
-      hasThinking,
-      isRedactThinkingActive: betasParams.includes(REDACT_THINKING_BETA_HEADER),
-      clearAllThinking: thinkingClearLatched,
-    }))
+    if (
+      !options.wireBody &&
+      thinking?.type === 'disabled' &&
+      modelCapsEffortWhenDisabled(options.model) &&
+      typeof outputConfig.effort === 'string' &&
+      effortLevelAboveHigh(outputConfig.effort)
+    ) {
+      outputConfig.effort = 'high'
+    }
+    const toolChoice =
+      !options.wireBody &&
+      options.toolChoice?.type === 'tool' &&
+      (thinking?.type === 'enabled' ||
+        thinking?.type === 'adaptive' ||
+        (thinking === undefined && modelRejectsDisabledThinking(options.model)))
+        ? ({ type: 'auto' } as const)
+        : options.toolChoice
+
+    const contextManagement = options.wireBody
+      ? options.contextManagementOverride
+      : options.contextManagementOverride ??
+        (options.requestContext ||
+        !betasParams.includes(CONTEXT_MANAGEMENT_BETA_HEADER)
+          ? undefined
+          : getAPIContextManagement({
+              hasThinking,
+              isRedactThinkingActive: betasParams.includes(
+                REDACT_THINKING_BETA_HEADER,
+              ),
+              clearAllThinking: thinkingClearLatched,
+            }))
 
     const enablePromptCaching =
       options.enablePromptCaching ?? getPromptCachingEnabled(retryContext.model)
@@ -1910,18 +1985,27 @@ async function* queryModel(
 
     // Only send temperature when thinking is disabled — the API requires
     // temperature: 1 when thinking is enabled, which is already the default.
-    const temperature = !hasThinking
-      ? (options.temperatureOverride ?? (options.requestContext ? undefined : 1))
-      : undefined
+    const temperature =
+      !hasThinking && modelAcceptsTemperature(options.model)
+        ? (options.temperatureOverride ??
+          (options.requestContext || options.wireBody ? undefined : 1))
+        : undefined
 
-    const presentBetas = withServerSafeguardBeta(
-      betasParams.filter(Boolean),
-      options.safeguards != null,
-    )
-    const filteredBetas = isKinQuerySource(options.querySource)
-      ? mergeOfficialExtraBetas(presentBetas)
-      : presentBetas
-    lastRequestBetas = filteredBetas
+    const callerBetas = Array.isArray(options.wireBody?.betas)
+      ? options.wireBody.betas.filter(
+          (beta): beta is string => typeof beta === 'string',
+        )
+      : []
+    const inferenceOnly =
+      isKinQuerySource(options.querySource) &&
+      isAnthropicAuthEnabled() &&
+      !hasProfileScope()
+    const requestBetas = [
+      ...(inferenceOnly
+        ? setupTokenBetaHeader(options.model).split(',')
+        : betasParams),
+      ...callerBetas,
+    ]
     const apiMessages = Array.isArray(options.wireMessages)
       ? (options.wireMessages as MessageParam[])
       : addCacheBreakpoints(
@@ -1947,34 +2031,38 @@ async function* queryModel(
       )
     }
 
-    return {
+    const params = assembleMessageRequest({
       model: normalizeModelStringForAPI(options.model),
       messages: apiMessages,
       system,
       tools: allTools,
-      tool_choice: options.toolChoice,
-      ...(useBetas && { betas: filteredBetas }),
-      metadata: getAPIMetadata(),
+      tool_choice: toolChoice,
+      betas: requestBetas,
+      metadata:
+        options.wireBody?.metadata &&
+        typeof options.wireBody.metadata === 'object'
+          ? { ...options.wireBody.metadata, ...getAPIMetadata() }
+          : getAPIMetadata(),
       max_tokens: maxOutputTokens,
       thinking,
-      ...(temperature !== undefined && { temperature }),
-      ...(options.topP !== undefined && { top_p: options.topP }),
-      ...(options.topK !== undefined && { top_k: options.topK }),
-      ...(options.stopSequences?.length && {
-        stop_sequences: options.stopSequences,
-      }),
-      ...(contextManagement &&
-        useBetas &&
-        betasParams.includes(CONTEXT_MANAGEMENT_BETA_HEADER) && {
-          context_management: contextManagement,
-        }),
-      ...extraBodyParams,
-      ...(options.safeguards != null ? { safeguards: options.safeguards } : {}),
-      ...(Object.keys(outputConfig).length > 0 && {
-        output_config: outputConfig,
-      }),
-      ...(speed !== undefined && { speed }),
-    }
+      temperature,
+      top_p: options.topP,
+      top_k: options.topK,
+      stop_sequences: options.stopSequences,
+      context_management: contextManagement,
+      extraBodyParams,
+      wireBody: options.wireBody,
+      safeguards: options.safeguards,
+      outputConfig: outputConfig as Record<string, unknown>,
+      speed,
+    })
+    const gatedBetas = withRequestProtocolBetas(requestBetas, params)
+    params.betas =
+      isKinQuerySource(options.querySource) && !inferenceOnly
+        ? mergeOfficialExtraBetas(gatedBetas)
+        : gatedBetas
+    lastRequestBetas = params.betas
+    return params
   }
 
   // Compute log scalars synchronously so the fire-and-forget .then() closure
@@ -1987,10 +2075,10 @@ async function* queryModel(
       thinkingConfig,
     })
     const logMessagesLength = queryParams.messages.length
-    const logBetas = useBetas ? (queryParams.betas ?? []) : []
+    const logBetas = queryParams.betas
     const logThinkingType = queryParams.thinking?.type ?? 'disabled'
     const logEffortValue = queryParams.output_config?.effort
-    void options.getToolPermissionContext().then(permissionContext => {
+    void options.getToolPermissionContext().then((permissionContext) => {
       logAPIQuery({
         model: options.model,
         messagesLength: logMessagesLength,
@@ -2150,7 +2238,7 @@ async function* queryModel(
         return
       }
       streamIdleWarningTimer = setTimeout(
-        warnMs => {
+        (warnMs) => {
           logForDebugging(
             `Streaming idle warning: no chunks received for ${warnMs / 1000}s`,
             { level: 'warn' },
@@ -2834,7 +2922,7 @@ async function* queryModel(
           attemptNumber = attempt
           maxOutputTokens = tokens
         },
-        params => captureAPIRequest(params, options.querySource),
+        (params) => captureAPIRequest(params, options.querySource),
         streamRequestId,
       )
 
@@ -2868,9 +2956,10 @@ async function* queryModel(
   } catch (errorFromRetry) {
     // Native jobs report raw failures, never interactive render/logging errors.
     if (isKinQuerySource(options.querySource)) {
-      const failure = errorFromRetry instanceof CannotRetryError
-        ? errorFromRetry.originalError
-        : errorFromRetry
+      const failure =
+        errorFromRetry instanceof CannotRetryError
+          ? errorFromRetry.originalError
+          : errorFromRetry
       options.onError?.(failure)
       throw failure
     }
@@ -2939,7 +3028,7 @@ async function* queryModel(
             attemptNumber = attempt
             maxOutputTokens = tokens
           },
-          params => captureAPIRequest(params, options.querySource),
+          (params) => captureAPIRequest(params, options.querySource),
           failedRequestId,
         )
 
@@ -3134,7 +3223,7 @@ async function* queryModel(
   // limit) until getToolPermissionContext() resolves.
   const logMessageCount = messagesForAPI.length
   const logMessageTokens = tokenCountFromLastAPIResponse(messagesForAPI)
-  void options.getToolPermissionContext().then(permissionContext => {
+  void options.getToolPermissionContext().then((permissionContext) => {
     logAPISuccessAndDuration({
       model:
         newMessages[0]?.message.model ?? partialMessage?.model ?? options.model,
@@ -3394,7 +3483,7 @@ export function addCacheBreakpoints(
 
   // Helper to deduplicate a cache_edits block against already-seen deletions
   const deduplicateEdits = (block: CachedMCEditsBlock): CachedMCEditsBlock => {
-    const uniqueEdits = block.edits.filter(edit => {
+    const uniqueEdits = block.edits.filter((edit) => {
       if (seenDeleteRefs.has(edit.cache_reference)) {
         return false
       }
@@ -3433,7 +3522,7 @@ export function addCacheBreakpoints(
           pinCacheEdits(i, newCacheEdits)
 
           logForDebugging(
-            `Added cache_edits block with ${dedupedNewEdits.edits.length} deletion(s) to message[${i}]: ${dedupedNewEdits.edits.map(e => e.cache_reference).join(', ')}`,
+            `Added cache_edits block with ${dedupedNewEdits.edits.length} deletion(s) to message[${i}]: ${dedupedNewEdits.edits.map((e) => e.cache_reference).join(', ')}`,
           )
           break
         }
@@ -3501,7 +3590,7 @@ export function buildSystemPromptBlocks(
   // IMPORTANT: Do not add any more blocks for caching or you will get a 400
   return splitSysPromptPrefix(systemPrompt, {
     skipGlobalCacheForSystemPrompt: options?.skipGlobalCacheForSystemPrompt,
-  }).map(block => {
+  }).map((block) => {
     return {
       type: 'text' as const,
       text: block.text,
@@ -3534,7 +3623,7 @@ export async function queryHaiku({
   const result = await withVCR(
     [
       createUserMessage({
-        content: systemPrompt.map(text => ({ type: 'text', text })),
+        content: systemPrompt.map((text) => ({ type: 'text', text })),
       }),
       createUserMessage({
         content: userPrompt,
@@ -3593,7 +3682,7 @@ export async function queryWithModel({
   const result = await withVCR(
     [
       createUserMessage({
-        content: systemPrompt.map(text => ({ type: 'text', text })),
+        content: systemPrompt.map((text) => ({ type: 'text', text })),
       }),
       createUserMessage({
         content: userPrompt,

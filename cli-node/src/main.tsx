@@ -51,7 +51,8 @@ import { installAsciicastRecorder } from './utils/asciicast.js';
 import { getSubscriptionType, isClaudeAISubscriber, prefetchAwsCredentialsAndBedRockInfoIfSafe, prefetchGcpCredentialsIfSafe, validateForceLoginOrg } from './utils/auth.js';
 import { checkHasTrustDialogAccepted, getGlobalConfig, getRemoteControlAtStartup, isAutoUpdaterDisabled, saveGlobalConfig } from './utils/config.js';
 import { seedEarlyInput, stopCapturingEarlyInput } from './utils/earlyInput.js';
-import { getInitialEffortSetting, parseEffortValue } from './utils/effort.js';
+import { EFFORT_LEVELS, getInitialEffortSetting, parseCliEffort, parseEffortValue } from './utils/effort.js';
+import { normalizeFallbackModels } from './utils/fallbackModel.js';
 import { getInitialFastModeSetting, isFastModeEnabled, prefetchFastModeStatus, resolveFastModeStatusFromCache } from './utils/fastMode.js';
 import { applyConfigEnvironmentVariables } from './utils/managedEnv.js';
 import { createSystemMessage, createUserMessage } from './utils/messages.js';
@@ -106,7 +107,7 @@ import { setupClaudeInChrome, shouldAutoEnableClaudeInChrome, shouldEnableClaude
 import { getContextWindowForModel } from './utils/context.js';
 import { loadConversationForResume } from './utils/conversationRecovery.js';
 import { buildDeepLinkBanner } from './utils/deepLink/banner.js';
-import { hasNodeOption, isBareMode, isEnvTruthy, isInProtectedNamespace } from './utils/envUtils.js';
+import { hasNodeOption, isBareMode, isCustomizationDisabled, isEnvTruthy, isInProtectedNamespace, isRestrictedMode, isSafeMode } from './utils/envUtils.js';
 import { refreshExampleCommands } from './utils/exampleCommands.js';
 import type { FpsMetrics } from './utils/fpsTracker.js';
 import { getWorktreePaths } from './utils/getWorktreePaths.js';
@@ -116,9 +117,11 @@ import { safeParseJSON } from './utils/json.js';
 import { logError } from './utils/log.js';
 import { getModelDeprecationWarning } from './utils/model/deprecation.js';
 import { getDefaultMainLoopModel, getUserSpecifiedModelSetting, normalizeModelStringForAPI, parseUserSpecifiedModel } from './utils/model/model.js';
+import { isModelAllowed } from './utils/model/modelAllowlist.js';
 import { ensureModelStringsInitialized } from './utils/model/modelStrings.js';
-import { PERMISSION_MODES } from './utils/permissions/PermissionMode.js';
-import { checkAndDisableBypassPermissions, getAutoModeEnabledStateIfCached, initializeToolPermissionContext, initialPermissionModeFromCLI, isDefaultPermissionModeAuto, parseToolListFromCLI, removeDangerousPermissions, stripDangerousPermissionsForAutoMode, verifyAutoModeGateAccess } from './utils/permissions/permissionSetup.js';
+import { PERMISSION_MODE_CLI_CHOICES, PERMISSION_MODES, parsePermissionModeCli } from './utils/permissions/PermissionMode.js';
+import { applyProactivityPermissionMode, checkAndDisableBypassPermissions, getAutoModeEnabledStateIfCached, initializeToolPermissionContext, initialPermissionModeFromCLI, isDefaultPermissionModeAuto, isRemoteThinClientSession, parseToolListFromCLI, removeDangerousPermissions, stripDangerousPermissionsForAutoMode, verifyAutoModeGateAccess } from './utils/permissions/permissionSetup.js';
+import { restrictedBypassConflict } from './utils/permissions/restrictedMode.js';
 import { cleanupOrphanedPluginVersionsInBackground } from './utils/plugins/cacheUtils.js';
 import { initializeVersionedPlugins } from './utils/plugins/installedPluginsManager.js';
 import { getManagedPluginNames } from './utils/plugins/managedPlugins.js';
@@ -201,7 +204,7 @@ import { migrateChangelogFromConfig } from './utils/releaseNotes.js';
 import { SandboxManager } from './utils/sandbox/sandbox-adapter.js';
 import { fetchSession, prepareApiRequest } from './utils/teleport/api.js';
 import { checkOutTeleportedSessionBranch, processMessagesForTeleportResume, teleportToRemoteWithErrorHandling, validateGitState, validateSessionRepository } from './utils/teleport.js';
-import { shouldEnableThinkingByDefault, type ThinkingConfig } from './utils/thinking.js';
+import { shouldEnableThinkingByDefault, type ThinkingConfig, type ThinkingDisplay } from './utils/thinking.js';
 import { initUser, resetUserCache } from './utils/user.js';
 import { getTmuxInstallInstructions, isTmuxAvailable, parsePRReference } from './utils/worktree.js';
 
@@ -420,7 +423,7 @@ export function startDeferredPrefetches(): void {
 
   // File change detectors deferred from init() to unblock first render
   void settingsChangeDetector.initialize();
-  if (!isBareMode()) {
+  if (!isCustomizationDisabled('skills')) {
     void skillChangeDetector.initialize();
   }
 
@@ -499,6 +502,28 @@ function loadSettingSourcesFromFlag(settingSourcesArg: string): void {
  * Parse and load settings flags early, before init()
  * This ensures settings are filtered from the start of initialization
  */
+
+/** Official `_Wt`: auto, 100k–1M, or 200 shorthand → 200000. */
+function parseAutocompactWindow(raw: string): 'auto' | number | undefined {
+  const n = raw.trim().toLowerCase();
+  if (n === 'auto') {
+    return 'auto';
+  }
+  let tokens: number;
+  if (n.endsWith('m')) {
+    tokens = parseFloat(n) * 1e6;
+  } else if (n.endsWith('k')) {
+    tokens = parseFloat(n) * 1000;
+  } else {
+    const numeric = Number(n);
+    tokens = numeric >= 100 && numeric <= 1000 ? numeric * 1000 : numeric;
+  }
+  if (!Number.isFinite(tokens) || tokens < 100_000 || tokens > 1_000_000) {
+    return undefined;
+  }
+  return Math.round(tokens);
+}
+
 function eagerLoadSettings(): void {
   profileCheckpoint('eagerLoadSettings_start');
   // Parse --settings flag early to ensure settings are loaded before init()
@@ -511,6 +536,9 @@ function eagerLoadSettings(): void {
   const settingSourcesArg = eagerParseCliFlag('--setting-sources');
   if (settingSourcesArg !== undefined) {
     loadSettingSourcesFromFlag(settingSourcesArg);
+  }
+  if (process.argv.includes('--restricted') || isRestrictedMode()) {
+    setAllowedSettingSources([]);
   }
   profileCheckpoint('eagerLoadSettings_end');
 }
@@ -856,7 +884,7 @@ export async function main() {
 }
 async function getInputPrompt(prompt: string, inputFormat: 'text' | 'stream-json'): Promise<string | AsyncIterable<string>> {
   // Official -p peeks stdin and then waits for EOF. A live kernel pipe never ends.
-  if (process.env.CLAUDE_CODE_KIN_NATIVE_SLOTS) {
+  if (process.env.CLAUDE_CODE_NATIVE_SLOTS) {
     return prompt
   }
   if (!process.stdin.isTTY &&
@@ -989,19 +1017,18 @@ async function run(): Promise<CommanderCommand> {
       throw new Error('--task-budget must be a positive integer');
     }
     return tokens;
-  }).hideHelp()).option('--replay-user-messages', 'Re-emit user messages from stdin back on stdout for acknowledgment (only works with --input-format=stream-json and --output-format=stream-json)', () => true).addOption(new Option('--enable-auth-status', 'Enable auth status messages in SDK mode').default(false).hideHelp()).option('--allowedTools, --allowed-tools <tools...>', 'Comma or space-separated list of tool names to allow (e.g. "Bash(git:*) Edit")').option('--tools <tools...>', 'Specify the list of available tools from the built-in set. Use "" to disable all tools, "default" to use all tools, or specify tool names (e.g. "Bash,Edit,Read").').option('--disallowedTools, --disallowed-tools <tools...>', 'Comma or space-separated list of tool names to deny (e.g. "Bash(git:*) Edit")').option('--mcp-config <configs...>', 'Load MCP servers from JSON files or strings (space-separated)').addOption(new Option('--permission-prompt-tool <tool>', 'MCP tool to use for permission prompts (only works with --print)').argParser(String).hideHelp()).addOption(new Option('--system-prompt <prompt>', 'System prompt to use for the session').argParser(String)).addOption(new Option('--system-prompt-file <file>', 'Read system prompt from a file').argParser(String).hideHelp()).addOption(new Option('--append-system-prompt <prompt>', 'Append a system prompt to the default system prompt').argParser(String)).addOption(new Option('--append-system-prompt-file <file>', 'Read system prompt from a file and append to the default system prompt').argParser(String).hideHelp()).addOption(new Option('--permission-mode <mode>', 'Permission mode to use for the session').argParser(String).choices(PERMISSION_MODES)).option('-c, --continue', 'Continue the most recent conversation in the current directory', () => true).option('-r, --resume [value]', 'Resume a conversation by session ID, or open interactive picker with optional search term', value => value || true).option('--fork-session', 'When resuming, create a new session ID instead of reusing the original (use with --resume or --continue)', () => true).addOption(new Option('--prefill <text>', 'Pre-fill the prompt input with text without submitting it').hideHelp()).addOption(new Option('--deep-link-origin', 'Signal that this session was launched from a deep link').hideHelp()).addOption(new Option('--deep-link-repo <slug>', 'Repo slug the deep link ?repo= parameter resolved to the current cwd').hideHelp()).addOption(new Option('--deep-link-last-fetch <ms>', 'FETCH_HEAD mtime in epoch ms, precomputed by the deep link trampoline').argParser(v => {
+  }).hideHelp()).option('--replay-user-messages', 'Re-emit user messages from stdin back on stdout for acknowledgment (only works with --input-format=stream-json and --output-format=stream-json)', () => true).addOption(new Option('--enable-auth-status', 'Enable auth status messages in SDK mode').default(false).hideHelp()).option('--allowedTools, --allowed-tools <tools...>', 'Comma or space-separated list of tool names to allow (e.g. "Bash(git:*) Edit")').option('--tools <tools...>', 'Specify the list of available tools from the built-in set. Use "" to disable all tools, "default" to use all tools, or specify tool names (e.g. "Bash,Edit,Read").').option('--disallowedTools, --disallowed-tools <tools...>', 'Comma or space-separated list of tool names to deny (e.g. "Bash(git:*) Edit")').option('--mcp-config <configs...>', 'Load MCP servers from JSON files or strings (space-separated)').addOption(new Option('--permission-prompt-tool <tool>', 'MCP tool to use for permission prompts (only works with --print)').argParser(String).hideHelp()).addOption(new Option('--system-prompt <prompt>', 'System prompt to use for the session').argParser(String)).addOption(new Option('--system-prompt-file <file>', 'Read system prompt from a file').argParser(String).hideHelp()).addOption(new Option('--append-system-prompt <prompt>', 'Append a system prompt to the default system prompt').argParser(String)).addOption(new Option('--append-system-prompt-file <file>', 'Read system prompt from a file and append to the default system prompt').argParser(String).hideHelp()).addOption(new Option('--permission-mode <mode>', 'Permission mode to use for the session').choices(PERMISSION_MODE_CLI_CHOICES).argParser(parsePermissionModeCli)).option('-c, --continue', 'Continue the most recent conversation in the current directory', () => true).option('-r, --resume [value]', 'Resume a conversation by session ID, or open interactive picker with optional search term', value => value || true).option('--fork-session', 'When resuming, create a new session ID instead of reusing the original (use with --resume or --continue)', () => true).addOption(new Option('--prefill <text>', 'Pre-fill the prompt input with text without submitting it').hideHelp()).addOption(new Option('--deep-link-origin', 'Signal that this session was launched from a deep link').hideHelp()).addOption(new Option('--deep-link-repo <slug>', 'Repo slug the deep link ?repo= parameter resolved to the current cwd').hideHelp()).addOption(new Option('--deep-link-last-fetch <ms>', 'FETCH_HEAD mtime in epoch ms, precomputed by the deep link trampoline').argParser(v => {
     const n = Number(v);
     return Number.isFinite(n) ? n : undefined;
   }).hideHelp()).option('--from-pr [value]', 'Resume a session linked to a PR by PR number/URL, or open interactive picker with optional search term', value => value || true).option('--no-session-persistence', 'Disable session persistence - sessions will not be saved to disk and cannot be resumed (only works with --print)').addOption(new Option('--resume-session-at <message id>', 'When resuming, only messages up to and including the assistant message with <message.id> (use with --resume in print mode)').argParser(String).hideHelp()).addOption(new Option('--rewind-files <user-message-id>', 'Restore files to state at the specified user message and exit (requires --resume)').hideHelp())
   // @[MODEL LAUNCH]: Update the example model ID in the --model help text.
-  .option('--model <model>', `Model for the current session. Provide an alias for the latest model (e.g. 'sonnet' or 'opus') or a model's full name (e.g. 'claude-sonnet-4-6').`).addOption(new Option('--effort <level>', `Effort level for the current session (low, medium, high, max)`).argParser((rawValue: string) => {
-    const value = rawValue.toLowerCase();
-    const allowed = ['low', 'medium', 'high', 'max'];
-    if (!allowed.includes(value)) {
-      throw new InvalidArgumentError(`It must be one of: ${allowed.join(', ')}`);
+  .option('--model <model>', `Model for the current session. Provide an alias for the latest model (e.g. 'sonnet' or 'opus') or a model's full name (e.g. 'claude-sonnet-4-6').`).addOption(new Option('--effort <level>', `Effort level for the current session (${EFFORT_LEVELS.join(', ')})`).argParser((rawValue: string) => {
+    const parsed = parseCliEffort(rawValue);
+    if (parsed.warning) {
+      process.stderr.write(chalk.yellow(parsed.warning) + '\n');
     }
-    return value;
-  })).option('--agent <agent>', `Agent for the current session. Overrides the 'agent' setting.`).option('--single-process-subagents', 'Serve every request from N background agent slots inside this one process').option('--max-procs <count>', 'In-process agent slot count for --single-process-subagents (1-20)').option('--continuous-tool-loop', 'Keep one agent slot alive across tool_result turns instead of ending the loop').option('--betas <betas...>', 'Beta headers to include in API requests (API key users only)').option('--fallback-model <model>', 'Enable automatic fallback to specified model when default model is overloaded (only works with --print)').addOption(new Option('--workload <tag>', 'Workload tag for billing-header attribution (cc_workload). Process-scoped; set by SDK daemon callers that spawn subprocesses for cron work. (only works with --print)').hideHelp()).option('--settings <file-or-json>', 'Path to a settings JSON file or a JSON string to load additional settings from').option('--add-dir <directories...>', 'Additional directories to allow tool access to').option('--ide', 'Automatically connect to IDE on startup if exactly one valid IDE is available', () => true).option('--strict-mcp-config', 'Only use MCP servers from --mcp-config, ignoring all other MCP configurations', () => true).option('--session-id <uuid>', 'Use a specific session ID for the conversation (must be a valid UUID)').option('-n, --name <name>', 'Set a display name for this session (shown in /resume and terminal title)').option('--agents <json>', 'JSON object defining custom agents (e.g. \'{"reviewer": {"description": "Reviews code", "prompt": "You are a code reviewer"}}\')').option('--setting-sources <sources>', 'Comma-separated list of setting sources to load (user, project, local).')
+    return parsed.level;
+  })).option('--agent <agent>', `Agent for the current session. Overrides the 'agent' setting.`).option('--single-process-subagents', 'Serve every request from N background agent slots inside this one process').option('--max-procs <count>', 'In-process agent slot count for --single-process-subagents (1-20)').option('--continuous-tool-loop', 'Keep one agent slot alive across tool_result turns instead of ending the loop').option('--betas <betas...>', 'Beta headers to include in API requests (API key users only)').option('--fallback-model <model>', 'Enable automatic fallback to specified model(s) when the default model is overloaded or not available. Accepts a comma-separated list to try each in order. Re-tries the primary at the start of each user turn.').addOption(new Option('--workload <tag>', 'Workload tag for billing-header attribution (cc_workload). Process-scoped; set by SDK daemon callers that spawn subprocesses for cron work. (only works with --print)').hideHelp()).option('--settings <file-or-json>', 'Path to a settings JSON file or a JSON string to load additional settings from').option('--add-dir <directories...>', 'Additional directories to allow tool access to').option('--ide', 'Automatically connect to IDE on startup if exactly one valid IDE is available', () => true).option('--strict-mcp-config', 'Only use MCP servers from --mcp-config, ignoring all other MCP configurations', () => true).option('--session-id <uuid>', 'Use a specific session ID for the conversation (must be a valid UUID)').option('-n, --name <name>', 'Set a display name for this session (shown in /resume and terminal title)').option('--agents <json>', 'JSON object defining custom agents (e.g. \'{"reviewer": {"description": "Reviews code", "prompt": "You are a code reviewer"}}\')').option('--setting-sources <sources>', 'Comma-separated list of setting sources to load (user, project, local).')
   // gh-33508: <paths...> (variadic) consumed everything until the next
   // --flag. `claude --plugin-dir /path mcp add --transport http` swallowed
   // `mcp` and `add` as paths, then choked on --transport as an unknown
@@ -1017,6 +1044,17 @@ async function run(): Promise<CommanderCommand> {
       bare?: boolean;
     }).bare) {
       process.env.CLAUDE_CODE_SIMPLE = '1';
+    }
+    if ((options as {
+      safeMode?: boolean;
+    }).safeMode) {
+      process.env.CLAUDE_CODE_SAFE_MODE = '1';
+      process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS = '1';
+    }
+    if ((options as {
+      restricted?: boolean;
+    }).restricted) {
+      process.env.CLAUDE_CODE_RESTRICTED = '1';
     }
 
     // Ignore "code" as a prompt - treat it the same as no prompt
@@ -1101,8 +1139,11 @@ async function run(): Promise<CommanderCommand> {
       disallowedTools = [],
       mcpConfig = [],
       permissionMode: permissionModeCli,
+      inheritPermissionMode: inheritPermissionModeCli,
+      proactivity: cliProactivityLevel,
       addDir = [],
       fallbackModel,
+      restricted: restrictedCli = false,
       betas = [],
       ide = false,
       sessionId,
@@ -1338,9 +1379,14 @@ async function run(): Promise<CommanderCommand> {
     const isNonInteractiveSession = getIsNonInteractiveSession();
 
     // Validate that fallback model is different from main model
-    if (fallbackModel && options.model && fallbackModel === options.model) {
-      process.stderr.write(chalk.red('Error: Fallback model cannot be the same as the main model. Please specify a different model for --fallback-model.\n'));
-      process.exit(1);
+    const normalizedFallbacks = normalizeFallbackModels(fallbackModel, getDefaultMainLoopModel, isModelAllowed);
+    if (normalizedFallbacks && options.model) {
+      const primary = options.model === 'default' ? getDefaultMainLoopModel() : options.model;
+      const remaining = normalizedFallbacks.filter(model => model !== primary && model !== options.model);
+      if (remaining.length === 0) {
+        process.stderr.write(chalk.red('Error: Fallback model cannot be the same as the main model. Please specify a different model for --fallback-model.\n'));
+        process.exit(1);
+      }
     }
 
     // Handle system prompt options
@@ -1390,13 +1436,29 @@ async function run(): Promise<CommanderCommand> {
       const addendum = getTeammatePromptAddendum().TEAMMATE_SYSTEM_PROMPT_ADDENDUM;
       appendSystemPrompt = appendSystemPrompt ? `${appendSystemPrompt}\n\n${addendum}` : addendum;
     }
-    const {
+    let {
       mode: permissionMode,
       notification: permissionModeNotification
     } = initialPermissionModeFromCLI({
       permissionModeCli,
+      inheritPermissionModeCli,
       dangerouslySkipPermissions
     });
+
+    const restricted = Boolean(restrictedCli) || isRestrictedMode();
+    if (restricted && (isEnvTruthy(process.env.CLAUDE_CODE_REMOTE) || process.env.CLAUDE_CODE_ENTRYPOINT === 'ssh')) {
+      process.stderr.write(chalk.red('Error: --restricted cannot be enforced in a cloud, remote-environment or ssh session, which runs its tools on another machine\n'));
+      process.exit(1);
+    }
+    const bypassConflict = restrictedBypassConflict({
+      restricted,
+      permissionMode,
+      allowDangerouslySkipPermissions
+    });
+    if (bypassConflict) {
+      process.stderr.write(chalk.red(`Error: ${bypassConflict}\n`));
+      process.exit(1);
+    }
 
     // Store session bypass permissions mode for trust dialog check
     setSessionBypassPermissionsMode(permissionMode === 'bypassPermissions');
@@ -1754,9 +1816,18 @@ async function run(): Promise<CommanderCommand> {
       baseToolsCli: baseTools,
       permissionMode,
       allowDangerouslySkipPermissions,
-      addDirs: addDir
+      addDirs: addDir,
+      restricted
     });
     let toolPermissionContext = initResult.toolPermissionContext;
+    if (restricted) {
+      toolPermissionContext = {
+        ...toolPermissionContext,
+        restricted: true,
+        blockReadsOutsideWorkingDirectories: true,
+        isBypassPermissionsModeAvailable: false
+      };
+    }
     const {
       warnings,
       dangerousPermissions,
@@ -1773,6 +1844,33 @@ async function run(): Promise<CommanderCommand> {
     if (feature('TRANSCRIPT_CLASSIFIER') && dangerousPermissions.length > 0) {
       toolPermissionContext = stripDangerousPermissionsForAutoMode(toolPermissionContext);
     }
+    const proactivityApplied = applyProactivityPermissionMode({
+      context: toolPermissionContext,
+      cliProactivityLevel,
+      permissionModeCli,
+      inheritPermissionModeCli,
+      dangerouslySkipPermissions,
+      startsAsRemoteThinClient: isRemoteThinClientSession({
+        remote: feature('DIRECT_CONNECT') ? _pendingConnect?.url : undefined,
+        isNonInteractiveSession,
+        isContinue: Boolean(options.continue),
+        pendingConnectUrl: feature('DIRECT_CONNECT') ? _pendingConnect?.url : undefined,
+        pendingSSHHost: feature('SSH_REMOTE') ? _pendingSSH?.host : undefined,
+      }),
+    });
+    permissionMode = proactivityApplied.mode;
+    permissionModeNotification = permissionModeNotification ?? proactivityApplied.notification;
+    toolPermissionContext = proactivityApplied.context;
+    const proactivityBypassConflict = restrictedBypassConflict({
+      restricted,
+      permissionMode,
+      allowDangerouslySkipPermissions,
+    });
+    if (proactivityBypassConflict) {
+      process.stderr.write(chalk.red(`Error: ${proactivityBypassConflict}\n`));
+      process.exit(1);
+    }
+    setSessionBypassPermissionsMode(permissionMode === 'bypassPermissions');
 
     // Print any warnings from initialization
     warnings.forEach(warning => {
@@ -1789,7 +1887,7 @@ async function run(): Promise<CommanderCommand> {
     // --bare / SIMPLE: skip claude.ai proxy servers (datadog, Gmail,
     // Slack, BigQuery, PubMed — 6-14s each to connect). Scripted calls
     // that need MCP pass --mcp-config explicitly.
-    !isBareMode() ? fetchClaudeAIMcpConfigsIfEligible().then(configs => {
+    !isBareMode() && !isCustomizationDisabled('mcpClaudeAi') ? fetchClaudeAIMcpConfigsIfEligible().then(configs => {
       const {
         allowed,
         blocked
@@ -1884,14 +1982,22 @@ async function run(): Promise<CommanderCommand> {
     if (isSyntheticOutputToolEnabled({
       isNonInteractiveSession
     }) && options.jsonSchema) {
-      jsonSchema = jsonParse(options.jsonSchema) as ToolInputJSONSchema;
+      let parsed: unknown;
+      try {
+        parsed = jsonParse(options.jsonSchema);
+      } catch (error) {
+        process.stderr.write(chalk.red(`Error: --json-schema is not valid JSON: ${errorMessage(error)}\n`));
+        process.exit(1);
+      }
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        process.stderr.write(chalk.red('Error: --json-schema must be a JSON object\n'));
+        process.exit(1);
+      }
+      jsonSchema = parsed as ToolInputJSONSchema;
     }
     if (jsonSchema) {
       const syntheticOutputResult = createSyntheticOutputTool(jsonSchema);
       if ('tool' in syntheticOutputResult) {
-        // Add SyntheticOutputTool to the tools array AFTER getTools() filtering.
-        // This tool is excluded from normal filtering (see tools.ts) because it's
-        // an implementation detail for structured output, not a user-controlled tool.
         tools = [...tools, syntheticOutputResult.tool];
         logEvent('tengu_structured_output_enabled', {
           schema_property_count: Object.keys(jsonSchema.properties as Record<string, unknown> || {}).length as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1901,6 +2007,8 @@ async function run(): Promise<CommanderCommand> {
         logEvent('tengu_structured_output_failure', {
           error: 'Invalid JSON schema' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
         });
+        process.stderr.write(chalk.red(`Error: --json-schema is not a valid JSON Schema: ${syntheticOutputResult.error}\n`));
+        process.exit(1);
       }
     }
 
@@ -2021,7 +2129,7 @@ async function run(): Promise<CommanderCommand> {
     // Special case the default model with the null keyword
     // NOTE: Model resolution happens after setup() to ensure trust is established before AWS auth
     const userSpecifiedModel = options.model === 'default' ? getDefaultMainLoopModel() : options.model;
-    const userSpecifiedFallbackModel = fallbackModel === 'default' ? getDefaultMainLoopModel() : fallbackModel;
+    const userSpecifiedFallbackModel = normalizedFallbacks?.filter(model => model !== userSpecifiedModel);
 
     // Reuse preSetupCwd unless setup() chdir'd (worktreeEnabled). Saves a
     // getCwd() syscall in the common path.
@@ -2036,7 +2144,7 @@ async function run(): Promise<CommanderCommand> {
 
     // Parse CLI agents if provided via --agents flag
     let cliAgents: typeof agentDefinitionsResult.activeAgents = [];
-    if (agentsJson) {
+    if (agentsJson && !isCustomizationDisabled('agents', { explicitlyRequested: true })) {
       try {
         const parsedAgents = safeParseJSON(agentsJson);
         if (parsedAgents) {
@@ -2490,6 +2598,16 @@ async function run(): Promise<CommanderCommand> {
         }
       }
     }
+    if (options.thinkingDisplay && thinkingConfig.type !== 'disabled') {
+      const display: ThinkingDisplay = options.thinkingDisplay === 'highlights' ? 'omitted' : options.thinkingDisplay;
+      thinkingConfig = {
+        ...thinkingConfig,
+        display
+      };
+    }
+    if (options.autocompact && options.autocompact !== 'auto') {
+      process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(options.autocompact);
+    }
     logForDiagnosticsNoPII('info', 'started', {
       version: MACRO.VERSION,
       is_native_binary: isInBundledMode()
@@ -2552,11 +2670,11 @@ async function run(): Promise<CommanderCommand> {
     // versions) and Pass 2 (stamp unmarked orphans) already applied. The
     // warm also lands before autoupdate (fires on first submit in REPL)
     // can orphan this session's active version underneath us.
-    // --bare / SIMPLE: skip plugin version sync + orphan cleanup. These
+    // --bare / SIMPLE / --safe-mode: skip plugin version sync + orphan cleanup. These
     // are install/upgrade bookkeeping that scripted calls don't need —
     // the next interactive session will reconcile. The await here was
     // blocking -p on a marketplace round-trip.
-    if (isBareMode()) {
+    if (isCustomizationDisabled('plugins')) {
       // skip — no-op
     } else if (isNonInteractiveSession) {
       // In headless mode, await to ensure plugin sync completes before CLI exits
@@ -2730,7 +2848,7 @@ async function run(): Promise<CommanderCommand> {
       // fetch was kicked off early (line ~2558) so only residual time blocks
       // here. --bare skips claude.ai entirely for perf-sensitive scripts.
       profileCheckpoint('before_connectMcp');
-      if (!process.env.CLAUDE_CODE_KIN_NATIVE_SLOTS) {
+      if (!process.env.CLAUDE_CODE_NATIVE_SLOTS) {
         await connectMcpBatch(regularMcpConfigs, 'regular');
       }
       profileCheckpoint('after_connectMcp');
@@ -3813,6 +3931,19 @@ async function run(): Promise<CommanderCommand> {
     }
   }).version(`${MACRO.VERSION} (Claude Code)`, '-v, --version', 'Output the version number');
 
+  program.addOption(new Option('--thinking-display <display>', 'How thinking content appears in the response').choices(['summarized', 'omitted', 'highlights']).hideHelp());
+  program.option('--restricted', 'Restricted mode: removes the built-in tools that run commands or code (Bash, PowerShell, REPL and the other code-running tools) and WebFetch unless --tools names them, and ignores user, project and local settings files (managed settings and --settings still apply; add --strict-mcp-config to skip MCP servers too). Also confines the file tools to the working directories (--add-dir included), refuses bypassPermissions, and lets only a person or the configured permission handler approve writes to settings, git and tool-configuration files.');
+  program.option('--safe-mode', 'Disable user customizations (CLAUDE.md, skills and commands, installed plugins, auto-discovered MCP servers, agents, output styles, workflows, custom themes and keybindings). Explicit --mcp-config, admin-managed policy, hooks, auth, model selection, built-in tools and permissions still apply. Sets CLAUDE_CODE_SAFE_MODE=1.', () => true);
+  program.addOption(new Option('--inherit-permission-mode <mode>', 'Permission mode carried from a parent session, used only when nothing else configures one').choices(PERMISSION_MODE_CLI_CHOICES).argParser(parsePermissionModeCli).hideHelp());
+  program.addOption(new Option('--autocompact <auto|tokens>', 'Auto-compact window size (auto, or 100k–1M tokens)').argParser((value: string) => {
+    const parsed = parseAutocompactWindow(value);
+    if (parsed === undefined) {
+      throw new InvalidArgumentError("It must be 'auto', or between 100k and 1M (e.g. 500k, 200000, or 200 as shorthand)");
+    }
+    return parsed;
+  }));
+  program.addOption(new Option('--proactivity <level>', 'Permission-mode proactivity level').choices(['ask', 'default', 'proactive']).hideHelp());
+
   // Worktree flags
   program.option('-w, --worktree [name]', 'Create a new git worktree for this session (optionally specify a name)');
   program.option('--tmux', 'Create a tmux session for the worktree (requires --worktree). Uses iTerm2 native panes when available; use --tmux=classic for traditional tmux.');
@@ -4615,10 +4746,10 @@ async function logTenguInit({
   }
 }
 function maybeActivateProactive(options: unknown): void {
-  if ((feature('PROACTIVE') || feature('KAIROS')) && ((options as {
-    proactive?: boolean;
-  }).proactive || isEnvTruthy(process.env.CLAUDE_CODE_PROACTIVE))) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+  if (feature('PROACTIVE') || feature('KAIROS')) {
+    const proactiveFlag = typeof options === 'object' && options !== null && 'proactive' in options && Boolean(options.proactive);
+    if (!proactiveFlag && !isEnvTruthy(process.env.CLAUDE_CODE_PROACTIVE)) return;
+    // This legacy KAIROS subsystem is independent of --proactivity permissions.
     const proactiveModule = require('./proactive/index.js');
     if (!proactiveModule.isProactiveActive()) {
       proactiveModule.activateProactive('command');

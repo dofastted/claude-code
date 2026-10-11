@@ -26,8 +26,10 @@ import { isDebugToStdErr, logForDebugging } from '../../utils/debug.js'
 import { stampCchBody } from '../../utils/cch.js'
 import {
   applyOfficialOutboundHeaders,
+  claudeCodeIdentityHeaders,
   officialH2Fetch,
 } from '../../kin/officialFingerprint.js'
+import { getAgentContext } from '../../utils/agentContext.js'
 import {
   getAWSRegion,
   getVertexRegionForModel,
@@ -96,23 +98,30 @@ export async function getAnthropicClient({
   model,
   fetchOverride,
   source,
+  requestClass,
 }: {
   apiKey?: string
   maxRetries: number
   model?: string
   fetchOverride?: ClientOptions['fetch']
   source?: string
+  requestClass?: string
 }): Promise<Anthropic> {
   const containerId = process.env.CLAUDE_CODE_CONTAINER_ID
   const remoteSessionId = process.env.CLAUDE_CODE_REMOTE_SESSION_ID
   const clientApp = process.env.CLAUDE_AGENT_SDK_CLIENT_APP
   const customHeaders = getCustomHeaders()
   const defaultHeaders: { [key: string]: string } = {
-    'x-app': 'cli',
     'User-Agent': getUserAgent(),
     'X-Claude-Code-Session-Id': getSessionId(),
-    'x-claude-code-request-class': 'main',
-    ...customHeaders,
+    ...claudeCodeIdentityHeaders({
+      source,
+      requestClass,
+      agentContext: getAgentContext() as
+        | { agentType?: string; workflowRunId?: string }
+        | undefined,
+      customHeaders,
+    }),
     ...(containerId ? { 'x-claude-remote-container-id': containerId } : {}),
     ...(remoteSessionId
       ? { 'x-claude-remote-session-id': remoteSessionId }

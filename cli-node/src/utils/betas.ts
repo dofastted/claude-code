@@ -22,10 +22,6 @@ import {
   WEB_SEARCH_BETA_HEADER,
   THINKING_TOKEN_COUNT_BETA_HEADER,
   MID_CONVERSATION_SYSTEM_BETA_HEADER,
-  MID_CONVERSATION_SYSTEM_CLEAR_AT_BETA_HEADER,
-  THINKING_BINDING_CONTROLS_BETA_HEADER,
-  EXTENDED_CACHE_TTL_BETA_HEADER,
-  CACHE_DIAGNOSIS_BETA_HEADER,
 } from '../constants/betas.js'
 import { OAUTH_BETA_HEADER } from '../constants/oauth.js'
 import { isClaudeAISubscriber } from './auth.js'
@@ -113,7 +109,11 @@ export function modelSupportsISP(model: string): boolean {
     return !canonical.includes('claude-3-')
   }
   return (
-    canonical.includes('claude-opus-4') || canonical.includes('claude-sonnet-4')
+    canonical.includes('claude-opus-4') ||
+    canonical.includes('claude-sonnet-4') ||
+    canonical.includes('claude-opus-5') ||
+    canonical.includes('claude-sonnet-5') ||
+    canonical.includes('claude-haiku-5')
   )
 }
 
@@ -182,7 +182,7 @@ export function modelSupportsAutoMode(model: string): boolean {
     const rawLower = model.toLowerCase()
     if (
       config?.allowModels?.some(
-        am => am.toLowerCase() === rawLower || am.toLowerCase() === m,
+        (am) => am.toLowerCase() === rawLower || am.toLowerCase() === m,
       )
     ) {
       return true
@@ -239,7 +239,9 @@ export function shouldUseGlobalCacheScope(): boolean {
 
 export const getAllModelBetas = memoize((model: string): string[] => {
   const betaHeaders = []
-  const isHaiku = getCanonicalName(model).includes('haiku')
+  const canonicalName = getCanonicalName(model)
+  const isHaiku =
+    canonicalName.includes('haiku') && !canonicalName.includes('haiku-5')
   const provider = getAPIProvider()
   const includeFirstPartyOnlyBetas = shouldIncludeFirstPartyOnlyBetas()
 
@@ -365,18 +367,8 @@ export const getAllModelBetas = memoize((model: string): string[] => {
     betaHeaders.push(PROMPT_CACHING_SCOPE_BETA_HEADER)
   }
 
-  // 2.1.281 first-party messages always carry these. Order matches a captured
-  // cli -p request, aside from tool-search and effort which are appended later.
   if (includeFirstPartyOnlyBetas) {
-    for (const beta of [
-      MID_CONVERSATION_SYSTEM_BETA_HEADER,
-      MID_CONVERSATION_SYSTEM_CLEAR_AT_BETA_HEADER,
-      THINKING_BINDING_CONTROLS_BETA_HEADER,
-      EXTENDED_CACHE_TTL_BETA_HEADER,
-      CACHE_DIAGNOSIS_BETA_HEADER,
-    ]) {
-      if (!betaHeaders.includes(beta)) betaHeaders.push(beta)
-    }
+    betaHeaders.push(MID_CONVERSATION_SYSTEM_BETA_HEADER)
   }
 
   // If ANTHROPIC_BETAS is set, split it by commas and add to betaHeaders.
@@ -384,7 +376,7 @@ export const getAllModelBetas = memoize((model: string): string[] => {
   if (process.env.ANTHROPIC_BETAS) {
     betaHeaders.push(
       ...process.env.ANTHROPIC_BETAS.split(',')
-        .map(_ => _.trim())
+        .map((_) => _.trim())
         .filter(Boolean),
     )
   }
@@ -394,7 +386,7 @@ export const getAllModelBetas = memoize((model: string): string[] => {
 export const getModelBetas = memoize((model: string): string[] => {
   const modelBetas = getAllModelBetas(model)
   if (getAPIProvider() === 'bedrock') {
-    return modelBetas.filter(b => !BEDROCK_EXTRA_PARAMS_HEADERS.has(b))
+    return modelBetas.filter((b) => !BEDROCK_EXTRA_PARAMS_HEADERS.has(b))
   }
   return modelBetas
 })
@@ -402,7 +394,7 @@ export const getModelBetas = memoize((model: string): string[] => {
 export const getBedrockExtraBodyParamsBetas = memoize(
   (model: string): string[] => {
     const modelBetas = getAllModelBetas(model)
-    return modelBetas.filter(b => BEDROCK_EXTRA_PARAMS_HEADERS.has(b))
+    return modelBetas.filter((b) => BEDROCK_EXTRA_PARAMS_HEADERS.has(b))
   },
 )
 
@@ -447,7 +439,7 @@ export function getMergedBetas(
   }
 
   // Merge SDK betas without duplicates (already filtered by filterAllowedSdkBetas)
-  return [...baseBetas, ...sdkBetas.filter(b => !baseBetas.includes(b))]
+  return [...baseBetas, ...sdkBetas.filter((b) => !baseBetas.includes(b))]
 }
 
 export function clearBetasCaches(): void {

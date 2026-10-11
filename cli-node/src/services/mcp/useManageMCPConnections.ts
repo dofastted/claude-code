@@ -60,6 +60,7 @@ import {
   useSetAppState,
 } from '../../state/AppState.js'
 import { errorMessage } from '../../utils/errors.js'
+import { isCustomizationDisabled } from '../../utils/envUtils.js'
 /* eslint-enable @typescript-eslint/no-require-imports */
 import { logMCPDebug, logMCPError } from '../../utils/log.js'
 import { enqueue } from '../../utils/messageQueueManager.js'
@@ -865,7 +866,11 @@ export function useManageMCPConnections(
       // inside getClaudeCodeMcpConfigs; it's awaited only at the dedup step.
       // Phase 2 below awaits the same promise — no second network call.
       let claudeaiPromise: Promise<Record<string, ScopedMcpServerConfig>>
-      if (isStrictMcpConfig || doesEnterpriseMcpConfigExist()) {
+      if (
+        isStrictMcpConfig ||
+        doesEnterpriseMcpConfigExist() ||
+        isCustomizationDisabled('mcpClaudeAi')
+      ) {
         claudeaiPromise = Promise.resolve({})
       } else {
         clearClaudeAIMcpConfigsCache()

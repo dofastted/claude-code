@@ -2,7 +2,9 @@ import memoize from 'lodash-es/memoize.js'
 import { basename } from 'path'
 import type { OutputStyleConfig } from '../../constants/outputStyles.js'
 import { getPluginErrorMessage } from '../../types/plugin.js'
+import { getInlinePlugins } from '../../bootstrap/state.js'
 import { logForDebugging } from '../debug.js'
+import { isCustomizationDisabled } from '../envUtils.js'
 import {
   coerceDescriptionToString,
   parseFrontmatter,
@@ -86,6 +88,14 @@ async function loadOutputStyleFromFile(
 
 export const loadPluginOutputStyles = memoize(
   async (): Promise<OutputStyleConfig[]> => {
+    if (
+      isCustomizationDisabled('outputStyles') ||
+      isCustomizationDisabled('plugins', {
+        explicitlyRequested: getInlinePlugins().length > 0,
+      })
+    ) {
+      return []
+    }
     // Only load output styles from enabled plugins
     const { enabled, errors } = await loadAllPluginsCacheOnly()
     const allStyles: OutputStyleConfig[] = []

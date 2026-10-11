@@ -160,7 +160,7 @@ import {
 } from './hooks/sessionHooks.js'
 import type { AppState } from '../state/AppState.js'
 import { jsonStringify, jsonParse } from './slowOperations.js'
-import { isEnvTruthy } from './envUtils.js'
+import { isCustomizationDisabled, isEnvTruthy } from './envUtils.js'
 import { errorMessage, getErrnoCode } from './errors.js'
 
 const TOOL_HOOK_EXECUTION_TIMEOUT_MS = 10 * 60 * 1000
@@ -4587,6 +4587,9 @@ export async function executeStatusLineCommand(
   timeoutMs: number = 5000, // Short timeout for status line
   logResult: boolean = false,
 ): Promise<string | undefined> {
+  if (isCustomizationDisabled('statusLine')) {
+    return undefined
+  }
   // Check if all hooks (including statusLine) are disabled by managed settings
   if (shouldDisableAllHooksIncludingManaged()) {
     return undefined
@@ -4677,6 +4680,9 @@ export async function executeFileSuggestionCommand(
   signal?: AbortSignal,
   timeoutMs: number = 5000, // Short timeout for typeahead suggestions
 ): Promise<string[]> {
+  if (isCustomizationDisabled('fileSuggestion')) {
+    return []
+  }
   // Check if all hooks are disabled by managed settings
   if (shouldDisableAllHooksIncludingManaged()) {
     return []

@@ -32,7 +32,8 @@ export function getUserAgent(): string {
   // so the read picks up the same setWorkload() value as getAttributionHeader.
   const workload = getWorkload()
   const workloadSuffix = workload ? `, workload/${workload}` : ''
-  return `claude-cli/${officialCliVersion()} (${process.env.USER_TYPE}, ${process.env.CLAUDE_CODE_ENTRYPOINT ?? 'cli'}${agentSdkVersion}${clientApp}${workloadSuffix})`
+  // Official jH hardcodes `external`. USER_TYPE is not a UA classifier.
+  return `claude-cli/${officialCliVersion()} (external, ${process.env.CLAUDE_CODE_ENTRYPOINT ?? 'cli'}${agentSdkVersion}${clientApp}${workloadSuffix})`
 }
 
 export function getMCPUserAgent(): string {

@@ -273,8 +273,7 @@ import {
 import { getModelOptions } from 'src/utils/model/modelOptions.js'
 import {
   modelSupportsEffort,
-  modelSupportsMaxEffort,
-  EFFORT_LEVELS,
+  getAvailableEffortLevels,
   resolveAppliedEffort,
 } from 'src/utils/effort.js'
 import { modelSupportsAdaptiveThinking } from 'src/utils/thinking.js'
@@ -476,7 +475,7 @@ export async function runHeadless(
     systemPrompt: string | undefined
     appendSystemPrompt: string | undefined
     userSpecifiedModel: string | undefined
-    fallbackModel: string | undefined
+    fallbackModel: string | string[] | undefined
     teleport: string | true | null | undefined
     sdkUrl: string | undefined
     replayUserMessages: boolean | undefined
@@ -491,12 +490,12 @@ export async function runHeadless(
     setSDKStatus?: (status: SDKStatus) => void
   },
 ): Promise<void> {
-  // cli-hop: exclusive stdin/stdout kin_* protocol. Enter before Grove so a
+  // cli-hop: exclusive stdin/stdout * protocol. Enter before Grove so a
   // live kernel pipe is never treated as a -p prompt. The CLI does not run
   // tools; each slot is one subagent-shaped query (`agent:kin`).
   // Dynamic import: nativeMessagesRunner pulls services/api/claude.js.
   // A static import would load the kin host into every headless -p start.
-  if (process.env.CLAUDE_CODE_KIN_NATIVE_SLOTS) {
+  if (process.env.CLAUDE_CODE_NATIVE_SLOTS) {
     const { runNativeMessagesLoop } = await import('../kin/nativeMessagesRunner.js')
     await runNativeMessagesLoop({ options })
     return
@@ -1007,7 +1006,7 @@ function runHeadlessStreaming(
     systemPrompt: string | undefined
     appendSystemPrompt: string | undefined
     userSpecifiedModel: string | undefined
-    fallbackModel: string | undefined
+    fallbackModel: string | string[] | undefined
     replayUserMessages?: boolean | undefined
     includePartialMessages?: boolean | undefined
     enableAuthStatus?: boolean | undefined
@@ -1219,9 +1218,7 @@ function runHeadlessStreaming(
       description: option.description,
       ...(hasEffort && {
         supportsEffort: true,
-        supportedEffortLevels: modelSupportsMaxEffort(resolvedModel)
-          ? [...EFFORT_LEVELS]
-          : EFFORT_LEVELS.filter(l => l !== 'max'),
+        supportedEffortLevels: getAvailableEffortLevels(resolvedModel),
       }),
       ...(hasAdaptiveThinking && { supportsAdaptiveThinking: true }),
       ...(hasFastMode && { supportsFastMode: true }),

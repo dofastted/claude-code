@@ -11,7 +11,9 @@ import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
 import { getPluginErrorMessage } from '../../types/plugin.js'
+import { getInlinePlugins } from '../../bootstrap/state.js'
 import { logForDebugging } from '../debug.js'
+import { isCustomizationDisabled } from '../envUtils.js'
 import { EFFORT_LEVELS, parseEffortValue } from '../effort.js'
 import {
   coerceDescriptionToString,
@@ -230,6 +232,14 @@ async function loadAgentFromFile(
 
 export const loadPluginAgents = memoize(
   async (): Promise<AgentDefinition[]> => {
+    if (
+      isCustomizationDisabled('agents') ||
+      isCustomizationDisabled('plugins', {
+        explicitlyRequested: getInlinePlugins().length > 0,
+      })
+    ) {
+      return []
+    }
     // Only load agents from enabled plugins
     const { enabled, errors } = await loadAllPluginsCacheOnly()
 
