@@ -125,6 +125,8 @@ pub struct Message {
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ChatToolCall>,
+    #[serde(default, flatten)]
+    pub extra: Map<String, Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -508,6 +510,33 @@ mod tests {
         let parsed: MessageRequest = serde_json::from_value(raw).unwrap();
         let out = serde_json::to_value(parsed).unwrap();
         assert_eq!(out["safeguards"]["actions"][0]["tool_use_id"], "toolu_1");
+    }
+
+    #[test]
+    fn message_output_config_survives_roundtrip() {
+        let raw = serde_json::json!({
+            "model": "claude-opus-5-5",
+            "max_tokens": 64,
+            "output_config": {"effort": "high"},
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "ok"},
+                {"role": "system", "content": [], "output_config": {"effort": "medium"}},
+                {"role": "user", "content": "again"}
+            ]
+        });
+        let parsed: MessageRequest = serde_json::from_value(raw).unwrap();
+        assert_eq!(parsed.extra["output_config"]["effort"], "high");
+        assert_eq!(
+            parsed.messages[2].extra["output_config"]["effort"],
+            "medium"
+        );
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(out["output_config"]["effort"], "high");
+        assert_eq!(out["messages"][2]["role"], "system");
+        assert_eq!(out["messages"][2]["content"], serde_json::json!([]));
+        assert_eq!(out["messages"][2]["output_config"]["effort"], "medium");
+        assert_eq!(out["messages"][3]["role"], "user");
     }
 
     #[test]

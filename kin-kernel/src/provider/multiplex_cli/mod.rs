@@ -2471,6 +2471,7 @@ mod tests {
                 content: MessageContent::Text(text.into()),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
+                extra: Default::default(),
             }],
             tools: vec![ToolDefinition {
                 name: "echo".into(),
@@ -2858,6 +2859,7 @@ mod tests {
                 }]),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
+                extra: Default::default(),
             }],
             max_tokens: 32,
             stream: false,
@@ -3251,6 +3253,7 @@ mod tests {
             }]),
             tool_call_id: None,
             tool_calls: Vec::new(),
+            extra: Default::default(),
         });
         runtime.jobs.lock().await.insert(
             job_id_2.clone(),

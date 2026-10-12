@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { assembleMessageRequest } from './requestBody.js'
+import { withRequestProtocolBetas } from '../../../../../src/lib/protocol/claude-code-betas.mjs'
 
 function generatedInput() {
   return {
@@ -96,4 +97,28 @@ test('ordinary requests retain generated tools and context management', () => {
   expect(body.context_management).toEqual({
     edits: [{ type: 'clear_thinking_20251015', keep: 'all' }],
   })
+})
+
+test('native wire messages keep empty system effort controls and top-level effort', () => {
+  const messages = [
+    { role: 'user', content: [{ type: 'text', text: 'Reply OK.' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'OK.' }] },
+    { role: 'system', content: [], output_config: { effort: 'medium' } },
+    { role: 'user', content: [{ type: 'text', text: 'Reply OK again.' }] },
+  ]
+  const body = assembleMessageRequest({
+    ...generatedInput(),
+    model: 'claude-opus-5-5',
+    messages,
+    outputConfig: { effort: 'high' },
+    wireBody: {
+      output_config: { effort: 'high' },
+      messages,
+    },
+  })
+  expect(body.output_config).toEqual({ effort: 'high' })
+  expect(body.messages).toEqual(messages)
+  const betas = withRequestProtocolBetas([], body)
+  expect(betas).toContain('mid-conversation-output-config-2026-07-01')
+  expect(betas).toContain('effort-2025-11-24')
 })

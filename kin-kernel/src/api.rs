@@ -575,6 +575,7 @@ fn pending_request(request: &MessageRequest, response: &MessageResponse) -> Mess
         content: MessageContent::Blocks(response.content.clone()),
         tool_call_id: None,
         tool_calls: Vec::new(),
+        extra: Default::default(),
     });
     pending
 }
