@@ -9,6 +9,23 @@ if [ ! -f "$os/fingerprint_apple.py" ] || [ ! -f "$os/kvm_fingerprint_engine.py"
   echo "kin-computer: algorithm sources missing under $os" >&2
   exit 1
 fi
+# Match the oldest control-plane runtime, not the build host's newer glibc.
+if [ "${KIN_COMPUTER_IN_CONTAINER:-}" != 1 ]; then
+  mkdir -p "$here/dist"
+  exec docker run --rm \
+    --mount "type=bind,src=$here,dst=/src,readonly" \
+    --mount "type=bind,src=$here/dist,dst=/src/dist" \
+    --mount "type=bind,src=$os,dst=/vm-os,readonly" \
+    node:22-bookworm-slim bash -c '
+      set -eu
+      apt-get update
+      apt-get install -y --no-install-recommends python3-dev python3-venv gcc g++ patchelf
+      python3 -m venv /tmp/build-env
+      /tmp/build-env/bin/pip install Nuitka zstandard ordered-set
+      KIN_COMPUTER_IN_CONTAINER=1 KIN_VM_OS_ROOT=/vm-os \
+        KIN_COMPUTER_PYTHON=/tmp/build-env/bin/python sh /src/build.sh
+    '
+fi
 if ! "$py" -m nuitka --version >/dev/null 2>&1; then
   echo "kin-computer: nuitka is not available to $py" >&2
   exit 1
