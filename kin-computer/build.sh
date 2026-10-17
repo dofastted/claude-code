@@ -13,13 +13,17 @@ fi
 if [ "${KIN_COMPUTER_IN_CONTAINER:-}" != 1 ]; then
   mkdir -p "$here/dist"
   exec docker run --rm \
+    -e APT_MIRROR \
     --mount "type=bind,src=$here,dst=/src,readonly" \
     --mount "type=bind,src=$here/dist,dst=/src/dist" \
     --mount "type=bind,src=$os,dst=/vm-os,readonly" \
-    node:22-bookworm-slim bash -c '
+    ubuntu:22.04 bash -c '
       set -eu
+      if [ -n "${APT_MIRROR:-}" ]; then
+        sed -i "s|http://archive.ubuntu.com/ubuntu|${APT_MIRROR}|g; s|http://security.ubuntu.com/ubuntu|${APT_MIRROR}|g" /etc/apt/sources.list
+      fi
       apt-get update
-      apt-get install -y --no-install-recommends python3-dev python3-venv gcc g++ patchelf
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -o Acquire::Retries=5 python3 python3-dev python3-venv python3-pip gcc g++ patchelf ca-certificates
       python3 -m venv /tmp/build-env
       /tmp/build-env/bin/pip install Nuitka zstandard ordered-set
       KIN_COMPUTER_IN_CONTAINER=1 KIN_VM_OS_ROOT=/vm-os \
