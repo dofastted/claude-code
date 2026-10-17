@@ -153,8 +153,9 @@ where
         Some(Value::Array(items)) => {
             let blocks = items
                 .into_iter()
-                .filter_map(|item| serde_json::from_value(item).ok())
-                .collect();
+                .map(serde_json::from_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(serde::de::Error::custom)?;
             Ok(MessageContent::Blocks(blocks))
         }
         Some(other) => Ok(MessageContent::Text(other.to_string())),
@@ -162,7 +163,7 @@ where
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ContentBlock {
     Text {
         text: String,
@@ -223,6 +224,9 @@ pub enum ContentBlock {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<Value>,
     },
+    /// Preserve extensions and newer blocks without reconstructing their fields.
+    #[serde(untagged)]
+    Raw(Value),
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -456,6 +460,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unknown_content_blocks_survive_roundtrip() {
+        let raw = serde_json::json!({
+            "model": "claude-opus-5-5",
+            "max_tokens": 64,
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "signed", "signature": "sig"},
+                    {"type": "tool_search_tool_result", "tool_use_id": "toolu_1", "content": {"items": [1, 2]}},
+                    {"type": "text", "text": "answer"}
+                ]
+            }]
+        });
+        let parsed: MessageRequest = serde_json::from_value(raw).unwrap();
+        let out = serde_json::to_value(parsed).unwrap();
+        assert_eq!(
+            out["messages"][0]["content"][1]["type"],
+            "tool_search_tool_result"
+        );
+        assert_eq!(
+            out["messages"][0]["content"][1]["content"]["items"],
+            serde_json::json!([1, 2])
+        );
+    }
+
+    #[test]
+    fn known_content_extensions_survive_history_roundtrip() {
+        let blocks = serde_json::json!([
+            {"type":"text","text":"answer","citations":[{"type":"char_location","start_char_index":0}]},
+            {"type":"image","source":{"type":"url","url":"https://example.test/a.png"},"cache_control":{"type":"ephemeral","ttl":"1h"}},
+            {"type":"thinking","thinking":"","signature":"signed","block_binding":"binding"},
+            {"type":"redacted_thinking","data":"encrypted","signature":"signed","block_binding":"binding"},
+            {"type":"tool_use","id":"t1","name":"echo","input":{},"caller":{"type":"direct"}},
+            {"type":"tool_result","tool_use_id":"t1","content":"ok","extension":{"nested":true}},
+            {"type":"document","source":{"type":"text","data":"document"},"citations":{"enabled":true}},
+            {"type":"server_tool_use","id":"s1","name":"search","input":{},"caller":{"type":"direct"}},
+            {"type":"web_search_tool_result","tool_use_id":"s1","content":[],"extension":true}
+        ]);
+        let request: MessageRequest = serde_json::from_value(serde_json::json!({
+            "model":"claude-opus-5-5","max_tokens":64,
+            "messages":[{"role":"assistant","content":blocks.clone()}]
+        }))
+        .unwrap();
+        let out = serde_json::to_value(request).unwrap();
+        assert_eq!(out["messages"][0]["content"], blocks);
+    }
+
+    #[test]
     fn official_messages_body_roundtrip() {
         let raw = serde_json::json!({
             "model": "claude-sonnet-5",
@@ -575,9 +627,11 @@ mod tests {
         let kept: MessageRequest = serde_json::from_value(signature_only).unwrap();
         let exact = serde_json::to_value(kept).unwrap();
         assert!(exact["messages"][0]["content"][0].get("data").is_none());
-        assert_eq!(exact["messages"][0]["content"][0]["signature"], "sig_real_1234567890abcdef");
+        assert_eq!(
+            exact["messages"][0]["content"][0]["signature"],
+            "sig_real_1234567890abcdef"
+        );
     }
-
 
     #[test]
     fn server_tool_omits_default_input_schema() {

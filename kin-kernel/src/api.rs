@@ -538,6 +538,9 @@ fn validate_request(request: &MessageRequest) -> Result<(), KernelError> {
                 .iter()
                 .map(|block| match block {
                     ContentBlock::ToolResult { content, .. } => content.to_string().len(),
+                    ContentBlock::Raw(raw) if raw["type"] == "tool_result" => raw
+                        .get("content")
+                        .map_or(0, |content| content.to_string().len()),
                     _ => 0,
                 })
                 .sum(),
@@ -561,6 +564,10 @@ fn tool_result_ids(request: &MessageRequest) -> Vec<String> {
                 .iter()
                 .filter_map(|block| match block {
                     ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+                    ContentBlock::Raw(raw) if raw["type"] == "tool_result" => raw
+                        .get("tool_use_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
                     _ => None,
                 })
                 .collect(),
@@ -798,6 +805,27 @@ mod tests {
         config::Config, provider::mock::MockProvider, scheduler::Scheduler,
         session::SessionDirectory,
     };
+
+    #[test]
+    fn extended_tool_results_keep_continuation_ids_and_size_limits() {
+        let request = |content: String| {
+            serde_json::from_value::<MessageRequest>(json!({
+                "model": "claude-opus-5-5", "max_tokens": 64,
+                "messages": [{"role":"user", "content":[{
+                    "type":"tool_result", "tool_use_id":"toolu_extended", "content":content,
+                    "extension":{"preserve":true}
+                }]}]
+            }))
+            .unwrap()
+        };
+        let small = request("ok".into());
+        assert_eq!(tool_result_ids(&small), vec!["toolu_extended"]);
+        assert!(validate_request(&small).is_ok());
+        let oversized = request("x".repeat(crate::config::MAX_TOOL_RESULT_BYTES + 1));
+        assert!(
+            matches!(validate_request(&oversized), Err(KernelError::InvalidRequest(message)) if message.contains("tool_result payload"))
+        );
+    }
 
     fn test_config() -> Config {
         Config {
