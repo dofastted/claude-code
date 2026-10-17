@@ -2,6 +2,14 @@
 
 仅记录本地源码与构建改动，不代表已发布、已部署或已同步到运行中的槽位。
 
+## 2026-10-18 — 九槽部署准备与备份（未部署）
+
+- TTL 设置 / Environment 关闭修复代码已原子化提交（`7ad99436`、`f63bac9d`、`9dd8fe20`）；本地 Node 全量 2922 passed / 8 skipped，前端契约 11 passed，新版 CLI/kernel 最终压缩 ELF 捕获 10 passed / 1 skipped。
+- 新 CLI 使用 UPX 5.0.2 压缩，27172956 字节，SHA256 `244ef884ce427feba8f0eec6ce7957045c2226e103fb0bec2d7df2949f5bc6c7`；kernel 12839808 字节，SHA256 `983575591514f771fdef6a2445bdb76db390b177874c533b0eb7562cd04f7977`。仅暂存，不覆盖本地交付副本或生产二进制。
+- 准备了 39825220 字节最小补丁包，SHA256 `79e21e0cffd29d3fd941814e16f018ef39fc90de9f4bac71800fce699461457d`；远端 `/tmp` 的 checksum / Node syntax / CLI version / bundled loader 参数校验通过。此包不能直接给整体替换 `src/lib` 的 `remote-apply.sh` 使用。
+- 现网 9 个 Anthropic 槽（6 本机 + 3 集群）已完整备份；3 个集群槽为只读镜像二进制，更新需要容器重建。未收到明确授权，按保守选项保留运行版本，**未执行控制面或任一槽位切换**，未重启 Node/Go/槽，未重建容器，未 push / Release / 同步。
+- 备份 `/opt/vm2api/.deploy-bak-cc296-1.3.187-20261017T191024Z-9dd8fe20`，权限 0700；原 kernel/CLI、配置、SQLite、容器和调度状态已记录。8 个运行中 Anthropic 内核 healthy / 20 ready slots；原暂停的 aws 保持停止。全部原进程、二进制、源码、web 和状态保持不变；这不是新版上线验收。具体清单和授权阻塞见 `README.md` 最新记录。
+
 ## 2026-10-18 — 面板前置契约本地对齐（未发布）
 
 ### 实现边界
