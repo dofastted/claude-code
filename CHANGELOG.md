@@ -2,6 +2,31 @@
 
 仅记录本地源码与构建改动，不代表已发布、已部署或已同步到运行中的槽位。
 
+## 2026-10-18 — 面板前置契约本地对齐（未发布）
+
+### 实现边界
+
+- 面板 Node 的 `OFFICIAL_CLI_VERSION`、persona 缺省值、OAuth UA 与 PTY fallback 对齐 `2.1.296`；kernel/bootstrap/面板终端环境从该版本源生成。已有显式运行时覆盖机制保留，新进程才读取版本环境。
+- 保留现有模式开关：官方家族开启 `official_cc_passthrough` 时，system/tools/messages 的 caller marker、显式 TTL、缺失 TTL 与顺序保留；非透传仍由 Node 清洗并按 last + 倒数第二 user 重写。
+- 透传 caller 超四点、thinking / redacted_thinking marker、非法 TTL、5m（含缺失）之后出现 1h，在调度前返回 `400 invalid_cache_control`。不依赖 kernel 降级，不裁剪调用方内容。
+- Node 应用重写模板后，仅补自产 marker 的缺失 TTL、按四点预算裁剪自产点；模板显式 TTL 不变。非法最终模板 request-scoped 400，零上游执行、不换号、不冷却账号。
+- CLI `wireSystemBlocks` 保留带 billing 的官方 / 子代理 system，不再要求 SDK identity；避免面板已透传的 system 再落入 CLI 自产布局。kernel 继续透明转发，本阶段没有新增 Rust 逻辑修改。
+- CLI 使用 `preserveToolCount` 只保护 native 调用方工具前缀，不再把整个 `allTools` 当作 caller-owned。native 调用将 caller tools 放在 `extraToolSchemas` 头部，执行工具数组为空；后续 advisor / CLI 附加工具仍补自有缺失 TTL、参与预算裁剪。caller tool 的缺失 TTL 原样保留。
+- native 不再按菜单 TTL 重分类 usage；日志 / 计费保留上游真实 5m/1h 分桶。面板前端组件、配置存量值与运行中槽位均未修改。
+
+### 本地验证与产物
+
+- 改前透传回归两项均失败（tools marker 被删、非法 caller marker 未报错），改后通过。
+- Node 最终全量单测：`node --test --test-concurrency=4 --test-reporter=spec test/unit/*.test.mjs`，2917 passed / 8 skipped / 0 failed。先补齐本地缺失的已声明依赖 `croner`（未改 package / lockfile）。
+- CLI 定向四文件最终：40 passed / 0 failed（含 caller prefix + owned extra tools 的 TTL 补齐及超额裁剪回归）；kernel `gateway_worker::cli_hop`：10 passed / 0 failed。格式化后 Node 定向回归 358 passed / 6 skipped / 0 failed。
+- 最终实际 Node handler → 新构建 kernel ELF → 新构建 CLI ELF → 本地 capture upstream：五项烟测通过，覆盖四个 caller 点混合 / 缺失 TTL、调度前拒绝、透传无点不加点、重写混合 TTL、caller tool 缺失 TTL 原样保留，并核对出站 UA 为 `2.1.296`。连同 classifier / effort / thinking 实际 ELF 回归共 10 passed / 1 skipped（旧 CLI 对照未提供）；自产超额模板另已在前一阶段烟测通过。
+- 混合 TTL 日志与计费回归通过：5m 100 token + 1h 300 token 按 Haiku 4.5 缓存写费用 `$0.000725`，不按菜单 1h 合并计费。
+- CLI 格式化及调用方工具前缀修正后编译成功，0 missing modules，输出 `/tmp/vm2api-cache-align-cli`，`--version` 为 `2.1.296 (Claude Code)`，最终 SHA256 `847abadc69a4a315840113a7e79efb40657584f06d466b785331865f1e6182a6`。
+- kernel release 构建成功，`kin-kernel/target/release/kernel` SHA256 `983575591514f771fdef6a2445bdb76db390b177874c533b0eb7562cd04f7977`；仍有既有 `continuation_ttl_secs` 未读 warning。
+- 本阶段未覆盖 `bin/cli-node`、`bin/kin-kernel` 或 `share/wrap-cli/` 交付副本；未发布、未部署、未执行 wrap-cli 同步或重启线上进程。本地 fixture 不证明真实账号缓存命中；实际生产版本、槽内 ELF 与端到端账号验证仍待发布部署授权后单独核验。
+
+以下是本阶段之前的 kernel / CLI 初始变更记录，其中“面板尚未实施”描述的是当时状态。
+
 ## 2026-10-18 — Claude Code 2.1.296 cache breakpoint 对齐
 
 ### 主要改动
