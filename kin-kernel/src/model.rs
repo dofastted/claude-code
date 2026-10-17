@@ -203,8 +203,10 @@ pub enum ContentBlock {
         signature: Option<String>,
     },
     RedactedThinking {
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Value::is_null")]
         data: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
     },
     ServerToolUse {
         id: String,
@@ -538,6 +540,44 @@ mod tests {
         assert_eq!(out["messages"][2]["output_config"]["effort"], "medium");
         assert_eq!(out["messages"][3]["role"], "user");
     }
+    #[test]
+    fn signed_thinking_history_survives_roundtrip() {
+        let raw = serde_json::json!({
+            "model": "claude-opus-5-5",
+            "max_tokens": 64,
+            "thinking": {"type": "adaptive"},
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "", "signature": "signed"},
+                    {"type": "redacted_thinking", "data": "encrypted", "signature": "signed"},
+                    {"type": "text", "text": "answer"}
+                ]
+            }]
+        });
+        let parsed: MessageRequest = serde_json::from_value(raw).unwrap();
+        let out = serde_json::to_value(parsed).unwrap();
+        let blocks = &out["messages"][0]["content"];
+        assert_eq!(blocks[0]["thinking"], "");
+        assert_eq!(blocks[0]["signature"], "signed");
+        assert_eq!(blocks[1]["type"], "redacted_thinking");
+        assert_eq!(blocks[1]["data"], "encrypted");
+        assert_eq!(blocks[1]["signature"], "signed");
+        assert!(blocks[1].get("cache_control").is_none());
+        let signature_only = serde_json::json!({
+            "model": "claude-opus-5-5",
+            "max_tokens": 64,
+            "messages": [{
+                "role": "assistant",
+                "content": [{"type": "redacted_thinking", "signature": "sig_real_1234567890abcdef"}]
+            }]
+        });
+        let kept: MessageRequest = serde_json::from_value(signature_only).unwrap();
+        let exact = serde_json::to_value(kept).unwrap();
+        assert!(exact["messages"][0]["content"][0].get("data").is_none());
+        assert_eq!(exact["messages"][0]["content"][0]["signature"], "sig_real_1234567890abcdef");
+    }
+
 
     #[test]
     fn server_tool_omits_default_input_schema() {
