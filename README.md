@@ -326,3 +326,12 @@ docker exec vm2api node --input-type=module -e 'const r = await fetch("http://12
 - 用户单独批准集群镜像升级及容器重建后，节点构建 `vm2api/kin-slot-ubuntu-24.04:301276cbfcfc`，`jp-pro` 和 `aws-vm` 经现有 reload API 更新。二者新 kernel 同 SHA256、启动验收 healthy / ready_slots=20；`jp-pro` 保持运行，`aws-vm` 原先不运行，验收后停止且保留 paused / oauth_revoked。节点旧容器定义备份 `/home/ubuntu/.vm2api/.kernel-preserve-backup-31d95c3`，旧镜像保留。
 - Node / Go 前门未重启；两个 Codex 槽的容器 ID 与 StartedAt 不变。全部 9 槽原 `status`、`schedulable`、`schedule_manual` 已核对恢复。
 - 真实上游 smoke：`vm-03` 三轮 200 pong，cache read `0 / 12880 / 12893`，creation `12880 / 13 / 13`；`jp-pro` 三轮 200 pong，read `0 / 12876 / 12889`，creation `12876 / 13 / 13`。SQLite 中两组各三条共享同一组内 outbound session。仅证明这两组新会话的缓存复用，不证明原事故 index 278 已定位或解决。
+
+## 2026-10-18 获准后九槽补丁部署完成
+
+- 后续已明确授权重建 `aws-vm`、`jp-pro`、`jp-pro2`；本条取代上一节“仍需授权 / 未切换”的当前状态。源码 revision `9dd8fe20` 已部署，VERSION 仍为 `1.3.187`；未 push / tag / Release。
+- 新鲜备份 `/opt/vm2api/.deploy-bak-cc296-authorized-20261017T193611Z-9dd8fe20`（0700），旧备份和旧镜像保留。Node 单次切换 PID `136935 → 1723282`，Go PID `996741` 不变；6 本地槽定向同步成功、ID 不变；集群镜像 `vm2api/kin-slot-ubuntu-24.04:d4c829ff783a`，仅获准的 3 个容器重建。
+- 9/9 槽实际 kernel `983575591514f771fdef6a2445bdb76db390b177874c533b0eb7562cd04f7977`、CLI `244ef884ce427feba8f0eec6ce7957045c2226e103fb0bec2d7df2949f5bc6c7`；9/9 配置 2.1.296。8 运行槽 healthy / 20 ready，实际 CLI 环境 2.1.296 / native 20 / sdk-cli / host refresh 1，父进程映射新内核。AWS 保持未启动、paused / oauth_revoked；JP-pro2 调度仍关闭。
+- 7 个原可调度槽共 14 次真实 200 pong：默认 1h、显式 5m、Environment off 的 caller 原文保留均通过 Node 出站记录核验。恢复后自动调度再 1 次 200 pong；原有效配置与全部 11 VM 调度/手动字段恢复。GPT 的 ID / StartedAt、8 个非目标母本二进制和其他容器 ID 不变，未覆盖凭据、身份、代理或卷。
+- 本次配置恢复产生过一次可定位的缓存重建：19:54:40 UTC 恢复 `official_full`，随后同一 Opus 链的 Environment 从短时区块变为完整续文块，read 降至 14611、creation 100099；下一条 read 恢复至 114710（恰为两者之和）。账号 / VM / session / TTL 未变，不是换号或缓存随机失效；后续验证不应在真实流量下切换全局 persona。
+- 新前端 308 项 manifest 校验；实际公网浏览器页面可用，5 个入口资源 200 且哈希等于新包。私有完整过程、断言归一化差异、旧 gate 不适用项和验证边界见 `CHANGELOG.md` 本条记录及备份内 JSON。未抓取最终 TLS wire；缓存计数为日志观测，部署探针响应层 cache_read=0 不等于上游缓存失效。不重置已有管理员凭据，也不伪称旧完整 gate 通过。

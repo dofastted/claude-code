@@ -1,6 +1,19 @@
 # local-src 变更记录
 
-仅记录本地源码与构建改动，不代表已发布、已部署或已同步到运行中的槽位。
+记录本地源码、构建和明确标注的部署结果；未标注上线的记录不代表已发布、已部署或已同步到运行中的槽位。
+
+## 2026-10-18 — 获准后完成九槽 2.1.296 补丁部署
+
+- 用户随后明确授权重建 `aws-vm`、`jp-pro`、`jp-pro2`，本条取代下方“未部署”的授权阻塞结论。应用 VERSION 保持 `1.3.187`，部署源码 revision `9dd8fe20`；未 push、未发布 tag / Release、未改 payload manifest。
+- 新鲜备份 `/opt/vm2api/.deploy-bak-cc296-authorized-20261017T193611Z-9dd8fe20`，权限 0700；旧备份与旧镜像继续保留。只覆盖 manifest 中 13 个 Node/Python 文件、完整新前端与 Anthropic 母本，不整体替换 `src/lib`，不覆盖生产配置、凭据、VM/DB 或其他二进制。
+- Node 单次切换：PID `136935 → 1723282`；Go 前门 PID `996741` 不变。6 个本机 Anthropic 槽定向 sync/restart 全部成功，容器 ID 保留。集群镜像 `vm2api/kin-slot-ubuntu-24.04:d4c829ff783a`；仅获准的 3 个容器按原 Config/HostConfig 重建，保留卷、hostname、用户、环境、网络/IP/MAC 与安全设置。AWS 新容器保持未启动（created）、业务 paused / oauth_revoked；JP-pro2 保持调度关闭。
+- 9/9 实际槽内 kernel SHA256 `983575591514f771fdef6a2445bdb76db390b177874c533b0eb7562cd04f7977`、CLI SHA256 `244ef884ce427feba8f0eec6ce7957045c2226e103fb0bec2d7df2949f5bc6c7`；9/9 配置 `cli_version=2.1.296`。8/8 运行内核 healthy / ready_slots=20，实际 CLI 进程版本环境 `2.1.296`、native slots `20`、entrypoint `sdk-cli`、host refresh `1`；父进程映射新 kernel，无 deleted 旧映射。停止 AWS 采用只读文件/镜像证明，不启动验收。
+- 原可调度的 7 槽各执行默认 `1h` 与 caller 显式 `5m` 两例：共 14 次真实上游 HTTP 200 / pong，14 个单次 attempt。Environment 关闭时，Node 出站体没有生成环境块，caller Environment（含空白、续行及 Pacific/Auckland）逐字保留；显式 5m 未被默认 1h 覆盖。设置 5m/1h 保存与回读均 200。恢复后再做 1 次不指定槽的真实请求，自动调度 200 pong，Environment 开启、默认 1h。
+- 选择性停调度及恢复均只匹配本次唯一 reason；11 个 VM 的原 status / schedulable / schedule_manual（含字段存在性）与 reason 已核对。身份/代理绑定摘要一致；2 个 GPT 容器 ID / StartedAt 不变，8 个非目标母本二进制哈希不变，其他本机/集群容器 ID 均未改变。
+- 生产 308 个 manifest 文件哈希一致；操作机浏览器实际渲染公网控制台，入口 5 个脚本/样式均 200 且与构建包 SHA256 一致。HTML 有边缘 beacon 注入，普通 urllib 资源请求曾被 403；浏览器正常加载，唯一网络错误为第三方 beacon，未当作应用失败或修改站点策略。
+- 验证脚本最初以原始 JSON 形状判定恢复，命中 API 补齐的两个 usage_probe 零默认字段及 null Environment map；已通过受支持 API 恢复原有效配置，并核对持久化 `official_full` / 默认 1h。保留真实成功请求日志取证，没有重复发送请求来重跑断言。管理员用户名密码登录门禁未重跑，未改凭据；管理 me / VM API 采用 master 鉴权验证 200。原 `verify-live.py` 的“全部容器 Up / ID 不变”不适用于这次获准的 3 容器重建及原停止 AWS，不宣称完整旧门禁通过。
+- 恢复设置的缓存影响已按用户指定日志追溯：19:54:40 UTC 通过 API 恢复 `official_full` 后，19:55:20 的 `8eb2b7d6-574a-48f0-b07f-7f643562bf65` 出站第 4 个 system 块由 43 字符短 Environment 变为 16893 字符完整续文/Environment，并增加该块 1h marker；同账号、VM、session、TTL、入站 system 与 tools 均未变。缓存 read `107869 → 14611 → 114710`，中间 creation `100099`，恰有 `14611 + 100099 = 114710`，下一条 `eb0bd1f1-f7e7-4388-8d4e-ac8e6fb5b742` 已复用重建前缀。这是本次在线配置验证/恢复产生的瞬时缓存干扰，不归因于随机丢缓存；后续避免在真实流量下切换全局 persona 做验证。
+- 验证边界：线上观测覆盖 Node 出站对象、实际 ELF/进程、内核健康与真实上游响应；未抓取最终 Anthropic TLS wire，也不据响应层 cache_read=0 推断上游缓存状态或宣称缓存命中。完整私有证据在新鲜备份的 `deployed-runtime-verification.json`、`live-behavior-verification.json`、`post-resume-verification.json` 与操作状态中；回滚只恢复部署文件及必要调度/runtime 字段，不回滚自然刷新的凭据或整份 VM JSON。
 
 ## 2026-10-18 — 九槽部署准备与备份（未部署）
 
