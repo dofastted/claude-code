@@ -104,6 +104,10 @@ install -m 755 target/release/codex-kernel ../../bin/codex-kernel
 
 不要把 `.local/` 或 `target/` 提交进父仓库。换 ELF 后重启 Codex 槽的宿主 kernel 进程（Node 子进程），不要 `docker rm`。
 
+2026-10-18 未发布 OpenAI WS/隐私配置：`.local/codex-kernel/` 增加每请求 `options.upstream_transport/user_agent/client_features/analytics/installation_id`。安装元数据与独立 Analytics 均默认关闭；安装 ID 每 hop 用本槽持久随机 UUID 覆盖旧启动指纹，非法值零上游拒绝。Analytics 使用官方 `codex_thread_initialized`，只上报真实 kernel 运行环境，不伪造 CLI 工具活动。HTTP/WS 的下游取消能关闭对应上游连接；显式 HTTP 不探 WS，协议 warmup 不降级 HTTP。
+
+本机 `bin/kin-codex-kernel` SHA256 `05b22ff0604f1f4290d1a3841b5c78ef7bbef0fd56dc1b42343032f88b0f5533`，旧 ELF 备份 `/tmp/kin-codex-kernel-before-openai-20261018`（旧 SHA256 `11c8ec08d2660a3d8beef4a3b55ed795c4b550a77ee6c8ff50d9b4af9c92d895`）。`CARGO_TARGET_DIR=target-terminalfix cargo test`：32 passed；release 构建成功。真实 ELF + 回环 HTTP/WS：默认零安装头/Analytics、per-hop UUID 覆盖旧指纹且 header/body 一致、非法 ID 零上游、UA 热切换、两种传输取消断连、Analytics 鉴权/完整事件/去重与关闭后的新会话零上报均通过。完整真实 gateway→ELF→回环链路验证 2 轮回放、两级开关、HTTP 保留、warmup 拒绝、画像/隐私热更新和安装 UUID 与持久文件一致。未用真实 OpenAI 账号，未发布 payload、未部署或重启现有槽。父仓库仍只交付 payload，不提交私有源码。
+
 ### cli-node
 
 `scripts/compile-cli-node.ts` 只编译，不压缩。目标是 `bun-linux-x64-baseline`，入口 `src/entrypoints/cli.tsx`，版本宏目前是 `2.1.284`。
