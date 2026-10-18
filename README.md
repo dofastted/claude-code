@@ -335,3 +335,10 @@ docker exec vm2api node --input-type=module -e 'const r = await fetch("http://12
 - 7 个原可调度槽共 14 次真实 200 pong：默认 1h、显式 5m、Environment off 的 caller 原文保留均通过 Node 出站记录核验。恢复后自动调度再 1 次 200 pong；原有效配置与全部 11 VM 调度/手动字段恢复。GPT 的 ID / StartedAt、8 个非目标母本二进制和其他容器 ID 不变，未覆盖凭据、身份、代理或卷。
 - 本次配置恢复产生过一次可定位的缓存重建：19:54:40 UTC 恢复 `official_full`，随后同一 Opus 链的 Environment 从短时区块变为完整续文块，read 降至 14611、creation 100099；下一条 read 恢复至 114710（恰为两者之和）。账号 / VM / session / TTL 未变，不是换号或缓存随机失效；后续验证不应在真实流量下切换全局 persona。
 - 新前端 308 项 manifest 校验；实际公网浏览器页面可用，5 个入口资源 200 且哈希等于新包。私有完整过程、断言归一化差异、旧 gate 不适用项和验证边界见 `CHANGELOG.md` 本条记录及备份内 JSON。未抓取最终 TLS wire；缓存计数为日志观测，部署探针响应层 cache_read=0 不等于上游缓存失效。不重置已有管理员凭据，也不伪称旧完整 gate 通过。
+
+## 2026-10-18 搜索历史重复 400 的 Node-only 热修复
+
+- 已按后续明确授权先上线 `8594008d` 的两份 Node 修复；VERSION 保持 `1.3.187`。备份 `/opt/vm2api/.deploy-bak-search-repair-20261018T010742Z-8594008d`（0700）；Node 单次切换 `1723282 → 3790730`，Go `996741` 不变。没有槽位 sync/restart/recreate、二进制或生产设置修改。
+- 真实隔离会话三轮 200 pong，同一出站 session，attempt `[400,200] → [200] → [200]`；全部容器 ID/状态/StartedAt、VM 调度/手动字段、routing 与二进制哈希保持基线。证据为备份内 `apply-result.json` / `live-search-repair-verification.json`，详细请求 ID 与模块哈希见 `CHANGELOG.md` 最新条目。
+- PR [#517](https://github.com/dofastted/vm2api/pull/517)，候选 `1.3.188`，隔离分支 `fix/search-history-repair-188`；未合并或发布。旧管理员登录门禁无法由 master 验收冒充，替代门禁未获明确授权，按保守默认暂停；旧脚本只看宿主机 Docker，AWS 原停止状态另行核对保留。发布前需对齐新 native payload 资产/manifest 并验证完整 1.3.188 树，不能把当前 1.3.187 热修复报告成完整发版。
+- 候选前端 TypeScript/Vite 构建通过；11 个 native 资产已本地准备并校验，目录 `/tmp/vm2api-payload-cc296-foiyqzyw`，仅 kernel/CLI 两项更新、其余 9 项不变。资产尚未发布，manifest 未伪造为已可下载。

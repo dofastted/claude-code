@@ -2,6 +2,17 @@
 
 记录本地源码、构建和明确标注的部署结果；未标注上线的记录不代表已发布、已部署或已同步到运行中的槽位。
 
+## 2026-10-18 — 搜索历史重复 400 热修复已上线，PR 待门禁
+
+- 用户明确要求先部署，再 PR / 合并 / Release。已将修复 `8594008d` 的两份 Node 模块上线，应用 VERSION 仍为 `1.3.187`；此次没有替换 web、kernel/CLI 或其他二进制，没有同步/重启/重建槽容器，没有修改生产配置、凭据或调度。
+- 新鲜备份 `/opt/vm2api/.deploy-bak-search-repair-20261018T010742Z-8594008d`（0700）；包含原模块、VERSION、SQLite 一致快照及完整容器/调度/配置/二进制哈希基线。Node 此次单次切换 PID `1723282 → 3790730`，Go PID `996741` 不变；全部本机/集群容器 ID、状态、StartedAt 与 VM 手动/调度字段一致，routing 与母本二进制哈希一致。
+- 线上隔离真实会话三轮均 200 pong，attempt 状态依次 `[400,200] / [200] / [200]`，均为 VM-13、同一个出站 session。请求 ID：`f4f3bcfe-8a6a-4b3a-9b3e-2985f318920e`、`8da810fa-97bb-43ee-a732-edfaab32cb8a`、`d8ead314-2d47-4cfa-a6f6-69efba11566f`；未修改全局 persona/TTL 验证。首轮完成后的异步日志暂未可见，随后从已有记录恢复并继续后两轮，没有重发首轮。
+- 修复模块 SHA256：`failover-runner.mjs` = `268c6dbb3eb62f3d6b184e546978fd14145c52b8bcccb3598eae88c1bb26f5e5`，`request-rectifier.mjs` = `17bafbcd3d607f50104b54e6853078b3ad48b66939dc202fd6babe2a3ce12265`。本地完整 Node 回归 2933 passed / 8 skipped；原生 CLI 三轮 2/1/1 及有界记录的失效/淘汰烟测通过。
+- 发布分支 `fix/search-history-repair-188` 从当前 origin/main 创建，只 cherry-pick 本会话六个相关提交，保留远端已合入的 GPT credits / KVM 修复，排除无关 MobaXterm 忽略提交；原工作区与已有历史不重置。候选版本 `1.3.188` 独立提交 `2c49f139`，PR [#517](https://github.com/dofastted/vm2api/pull/517) 为草稿。
+- 当前严格 `verify-live.py` 旧管理员用户名密码登录门禁有既有失败，未重置凭据、未重跑已知失败；master 管理 API 200 与上述真实上游验证不冒充该脚本退出 0。替代门禁的授权选择超时后保守暂停合并/发布。该旧脚本只列宿主机 Docker，原停止 AWS 由额外集群基线检查保留，并非其本次新增失败项。
+- 发布前还必须将 native payload 的公开资产/manifest 对齐已验证的 2.1.296 kernel/CLI，不引用不存在的资产 Release、不覆盖旧不可变资产。当前只推送 PR 分支，未合并、未创建应用 tag / Release；生产不宣称已为 `1.3.188`。完整私有证据见新鲜备份中的 `apply-result.json` 与 `live-search-repair-verification.json`。
+- 候选发布分支前端 `tsc -b && vite build` 成功（4237 modules）。Native payload 11 个资产已在本地 `/tmp/vm2api-payload-cc296-foiyqzyw` 备齐：先下载并逐项核对原不可变 payload，再仅替换已验证的 kernel / CLI，其余 9 项哈希不变；尚未创建资产 tag/Release，也未将 manifest 指向不存在的资产。
+
 ## 2026-10-18 — 获准后完成九槽 2.1.296 补丁部署
 
 - 用户随后明确授权重建 `aws-vm`、`jp-pro`、`jp-pro2`，本条取代下方“未部署”的授权阻塞结论。应用 VERSION 保持 `1.3.187`，部署源码 revision `9dd8fe20`；未 push、未发布 tag / Release、未改 payload manifest。
