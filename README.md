@@ -342,3 +342,4 @@ docker exec vm2api node --input-type=module -e 'const r = await fetch("http://12
 - 真实隔离会话三轮 200 pong，同一出站 session，attempt `[400,200] → [200] → [200]`；全部容器 ID/状态/StartedAt、VM 调度/手动字段、routing 与二进制哈希保持基线。证据为备份内 `apply-result.json` / `live-search-repair-verification.json`，详细请求 ID 与模块哈希见 `CHANGELOG.md` 最新条目。
 - PR [#517](https://github.com/dofastted/vm2api/pull/517)，候选 `1.3.188`，隔离分支 `fix/search-history-repair-188`；未合并或发布。旧管理员登录门禁无法由 master 验收冒充，替代门禁未获明确授权，按保守默认暂停；旧脚本只看宿主机 Docker，AWS 原停止状态另行核对保留。发布前需对齐新 native payload 资产/manifest 并验证完整 1.3.188 树，不能把当前 1.3.187 热修复报告成完整发版。
 - 候选前端 TypeScript/Vite 构建通过；11 个 native 资产已本地准备并校验，目录 `/tmp/vm2api-payload-cc296-foiyqzyw`，仅 kernel/CLI 两项更新、其余 9 项不变。资产尚未发布，manifest 未伪造为已可下载。
+- PR CI `39085806102`：unit / worker / kernel / web / arm64 全成功；live 登录门禁仍独立阻塞，未合并或创建应用 Release。

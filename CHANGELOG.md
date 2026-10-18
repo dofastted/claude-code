@@ -12,6 +12,7 @@
 - 当前严格 `verify-live.py` 旧管理员用户名密码登录门禁有既有失败，未重置凭据、未重跑已知失败；master 管理 API 200 与上述真实上游验证不冒充该脚本退出 0。替代门禁的授权选择超时后保守暂停合并/发布。该旧脚本只列宿主机 Docker，原停止 AWS 由额外集群基线检查保留，并非其本次新增失败项。
 - 发布前还必须将 native payload 的公开资产/manifest 对齐已验证的 2.1.296 kernel/CLI，不引用不存在的资产 Release、不覆盖旧不可变资产。当前只推送 PR 分支，未合并、未创建应用 tag / Release；生产不宣称已为 `1.3.188`。完整私有证据见新鲜备份中的 `apply-result.json` 与 `live-search-repair-verification.json`。
 - 候选发布分支前端 `tsc -b && vite build` 成功（4237 modules）。Native payload 11 个资产已在本地 `/tmp/vm2api-payload-cc296-foiyqzyw` 备齐：先下载并逐项核对原不可变 payload，再仅替换已验证的 kernel / CLI，其余 9 项哈希不变；尚未创建资产 tag/Release，也未将 manifest 指向不存在的资产。
+- PR CI run `39085806102` 的 unit / worker / kernel / web / arm64 全部成功；仍不将 CI 成功等同于旧管理员登录 live gate 通过，合并和应用发布继续保持暂停。
 
 ## 2026-10-18 — 获准后完成九槽 2.1.296 补丁部署
 
