@@ -343,3 +343,14 @@ docker exec vm2api node --input-type=module -e 'const r = await fetch("http://12
 - PR [#517](https://github.com/dofastted/vm2api/pull/517)，候选 `1.3.188`，隔离分支 `fix/search-history-repair-188`；未合并或发布。旧管理员登录门禁无法由 master 验收冒充，替代门禁未获明确授权，按保守默认暂停；旧脚本只看宿主机 Docker，AWS 原停止状态另行核对保留。发布前需对齐新 native payload 资产/manifest 并验证完整 1.3.188 树，不能把当前 1.3.187 热修复报告成完整发版。
 - 候选前端 TypeScript/Vite 构建通过；11 个 native 资产已本地准备并校验，目录 `/tmp/vm2api-payload-cc296-foiyqzyw`，仅 kernel/CLI 两项更新、其余 9 项不变。资产尚未发布，manifest 未伪造为已可下载。
 - PR CI `39085806102`：unit / worker / kernel / web / arm64 全成功；live 登录门禁仍独立阻塞，未合并或创建应用 Release。
+
+## 2026-10-18 v1.3.188 正式发布与完整上线
+
+- 本轮用户明确批准 master 鉴权 + 原状态保留作为本次 live 门禁；实际命令 `verify-live.py 1.3.188 --before /tmp/kin-before-1.3.187-search-repair.txt --auth-mode master --container-policy baseline` 最终退出 0。默认密码模式保留，旧密码登录不声称通过，管理员凭据未改。
+- PR [#517](https://github.com/dofastted/vm2api/pull/517) 已合并，合并提交 / tag `v1.3.188` = `0629424e63cdcf26301b155f609defc7ba63d878`；最终候选 `f7e224e3` 已普通 merge 保留并发合入的 Desktop #518，组合回归 152/152，CI `39088593405` 五项全成功。
+- Release [v1.3.188](https://github.com/dofastted/vm2api/releases/tag/v1.3.188) 正式公开且 latest；发布工作流 `39089080369` 四 job 全成功。11 份正式附件实际回下载并核对 SHA256/大小/ELF 架构通过（9 amd64、2 arm64）；native 资产快照 `payload-2026.10.18-cc296` 已公开并与 manifest 对齐，两个新 hash 为 kernel `98357559…`、CLI `244ef884…`，其他资产不变。
+- OCI `ghcr.io/dofastted/vm2api:v1.3.188` 的 index digest `sha256:b36b42e75e0e5a5c4a9098fc56acdebf99b010f60dbd50243945d6965c4242a3`，含 amd64/arm64；直接 Registry 核验 latest 相同、两个单架构 tag 的 digest 与 index 描述符相符。
+- 第一次完整候选备份 `/opt/vm2api/.deploy-bak-vm2api-1.3.188-20261018T014826Z`；纳入并行 main 后最终备份 `/opt/vm2api/.deploy-bak-vm2api-1.3.188-20261018T020306Z`。310 运行文件和 286 前端文件逐项校验。每次候选切换 Node 各 stop/start 一次，最终 PID `4178362`；Go `996741` 始终不变，全部容器 ID/状态/StartedAt、调度/手动字段、routing 和二进制哈希保留，没有槽 sync/restart/recreate。
+- 最终真实同会话三回合 200 pong，attempt `2 → 1 → 1`，8 个运行内核 healthy、配置 20 native slots。ready_slots 是空闲数，不能在真实流量中要求永远全空闲；错误的附加断言已修正，没有为跑绿重启健康槽。AWS 继续停止，JP-pro2 继续调度关闭，GPT 容器不变；没有全局 persona/TTL 验证翻转。
+- 实际公网浏览器登录界面正常，5 个入口资源 200 且等于候选 hash。最终备份内包含 source / live gate / real probe / final-state / public asset / OCI 证据；详细请求 ID、全部 SHA 和 CI 分析见 `CHANGELOG.md` 最新条目。未抓最终 TLS wire。
+- 原 `/mnt/x/vm2api` main 未强制重置，保留本地既有提交与私有源码修改；当前发布源树在 `/mnt/x/vm2api-wt-search-repair-188`。本条取代上一节“PR 待门禁 / 未发布”的当前状态，但保留其历史记录。

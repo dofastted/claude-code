@@ -2,6 +2,21 @@
 
 记录本地源码、构建和明确标注的部署结果；未标注上线的记录不代表已发布、已部署或已同步到运行中的槽位。
 
+## 2026-10-18 — v1.3.188 已部署、合并并正式发布
+
+- 用户本轮明确选择“批准替代门禁并继续发布”，允许本次以真实 master 管理鉴权 + 原状态保留验收替代陈旧用户名密码检查；没有重置或修改管理员凭据，不声称密码登录通过。`verify-live.py` 新增显式 `--auth-mode master --container-policy baseline`，默认仍为 password / up；授权模式在最终 1.3.188 候选上真实退出 0。
+- 旧 CI 失败 run `39067288984` 属于 PR #512：`crs-persona.mjs` 被写成字面量 `@file:/workspace/...`，Node 语法错误；ARM64 镜像构建完成但控制面启动失败。该内容不在本次候选。验收期间 main 又合入 Desktop 修复 PR #518（`c0a30e14`），通过普通 merge 纳入候选，没有重写既有历史；组合定向回归 152/152，最终 CI `39088593405` 的 unit / worker / kernel / web / arm64 全成功。
+- PR [#517](https://github.com/dofastted/vm2api/pull/517) 已于 02:08:24 UTC 合并。合并提交 / tag `v1.3.188` = `0629424e63cdcf26301b155f609defc7ba63d878`；已验收候选 `f7e224e3f4672cc1e9dc74ba66eee676b565adcf` 与合并提交 tree 完全一致。仅在核对 VERSION、tree、精确 PR head 和 main 基线后创建新 tag，未 retag / force push。
+- 发布 [v1.3.188](https://github.com/dofastted/vm2api/releases/tag/v1.3.188) 已公开，非 draft / prerelease，且为 latest；工作流 [39089080369](https://github.com/dofastted/vm2api/actions/runs/39089080369) 的 linux-amd64 / image-amd64 / image-arm64 / manifest 四 job 全成功。正式说明来自该版本 CHANGELOG，包含 #511 与升级范围；剩余注释仅有 runner 迁移提示和 `KIN_OAUTH_AUTH_BIN` 路径名称触发的静态告警，不含密钥值，未为消除告警改行为。
+- Native 资产快照 [payload-2026.10.18-cc296](https://github.com/dofastted/vm2api/releases/tag/payload-2026.10.18-cc296) 已发布为非 latest prerelease，tag 指向此前已合并的 main。11 个资产的服务端摘要 / 大小均与本地已验证文件匹配；只更新 kernel `983575591514f771fdef6a2445bdb76db390b177874c533b0eb7562cd04f7977` 和 CLI `244ef884ce427feba8f0eec6ce7957045c2226e103fb0bec2d7df2949f5bc6c7`，其他 9 项不变。清单提交 `9cb5058c` 已纳入 PR，真实 fetch-payload 下载并校验 12 个安装路径通过；旧资产未覆盖。
+- 正式 Release 的 11 份附件已全部实际回下载：服务端摘要 = 本地 SHA256、大小一致，ELF 9 份 amd64 / 2 份 arm64；7 个 opaque 附件均匹配 manifest。双架构 OCI index `sha256:b36b42e75e0e5a5c4a9098fc56acdebf99b010f60dbd50243945d6965c4242a3`；amd64 `sha256:9b20f4dafd586553091a119de86022d90838d310ef464188de16c28ef710e3b2`，arm64 `sha256:dc0d9ac222f2eaa256f069af7883ecff83d6225e4f7bab4216a4136a26398068`。直接 Registry 验证两个单架构 tag 与 index 对应且 latest = v1.3.188。
+- 完整候选按 310 个运行文件 + 286 个前端文件安装并逐项校验，不覆盖 `src/config`、VM、DB、.env。初次 1.3.188 备份 `/opt/vm2api/.deploy-bak-vm2api-1.3.188-20261018T014826Z`，Node `3790730 → 4076645`；纳入并发 main 后只改变两份身份识别模块，最终备份 `/opt/vm2api/.deploy-bak-vm2api-1.3.188-20261018T020306Z`，Node `4076645 → 4178362`。两次候选切换各仅一次受控 stop/start，Go PID `996741` 始终不变。
+- 全部本机/集群容器 ID、状态、StartedAt、VM 调度与 manual 字段、routing 哈希与二进制哈希均保持各自基线；未 wrap-cli sync、未重启或重建槽、未修改代理/身份/凭据，AWS 继续停止、JP-pro2 继续调度关闭。原生文件在切换前已与新 manifest 完全相同，所以不重复更新。
+- 最终真实三回合均 200 pong，同一个出站 session，attempt `[400,200] / [200] / [200]`；请求 `faaf2933-aa82-4fb5-af10-91b54a4ca9b7`、`90c0be02-db6c-4fc3-9985-762827412db0`、`c653a2b3-eea3-471b-9b8a-e651b31be07b`。8 个运行内核 healthy、无关闭/恢复中的槽；配置为 20 native slots / CLI 2.1.296。
+- 附加验收最初错误要求 `ready_slots=20`（全部空闲），与 vm-10 正常在途请求 `b4fd2fe5-e3aa-47e7-bfc3-a2c80e17cdf2` 重叠；该请求随后 200，内核无 CLI 重启。源码/既有测试确认 ready_slots 是空闲容量，已改用真实 healthy / closed / recovering 与配置容量检查，不重启健康槽来跑绿。该轮已完成请求从日志恢复，不重复发送；对最终并行合入的新候选另做独立新会话验收。
+- 操作机真实浏览器登录界面渲染正常，无横向溢出；5 个入口脚本/样式 200 且 SHA256 等于候选。完整 Source/health/gate/asset/registry/UI 证据已保存到最终备份，含 `apply-result.json`、`real-search-and-health-verification.json`、`live-gate-approved-mode.txt`、`release-assets-verified.json`、`registry-verified.json`、`public-ui-verified.json`、`final-state.json`。未抓最终 TLS wire，不把 Node 对象当作最终 wire。
+- 原工作区 main 未被强制 reset/rebase，保留原有无关提交和私有源码脏基线；当前发布源树位于 `/mnt/x/vm2api-wt-search-repair-188`，GitHub tag 指向已合并的提交。独立私有记录只提交本条和 README 新增段，不提交密钥或构建产物。
+
 ## 2026-10-18 — 搜索历史重复 400 热修复已上线，PR 待门禁
 
 - 用户明确要求先部署，再 PR / 合并 / Release。已将修复 `8594008d` 的两份 Node 模块上线，应用 VERSION 仍为 `1.3.187`；此次没有替换 web、kernel/CLI 或其他二进制，没有同步/重启/重建槽容器，没有修改生产配置、凭据或调度。
