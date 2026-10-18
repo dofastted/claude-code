@@ -358,3 +358,11 @@ docker exec vm2api node --input-type=module -e 'const r = await fetch("http://12
 - 最终真实同会话三回合 200 pong，attempt `2 → 1 → 1`，8 个运行内核 healthy、配置 20 native slots。ready_slots 是空闲数，不能在真实流量中要求永远全空闲；错误的附加断言已修正，没有为跑绿重启健康槽。AWS 继续停止，JP-pro2 继续调度关闭，GPT 容器不变；没有全局 persona/TTL 验证翻转。
 - 实际公网浏览器登录界面正常，5 个入口资源 200 且等于候选 hash。最终备份内包含 source / live gate / real probe / final-state / public asset / OCI 证据；详细请求 ID、全部 SHA 和 CI 分析见 `CHANGELOG.md` 最新条目。未抓最终 TLS wire。
 - 原 `/mnt/x/vm2api` main 未强制重置，保留本地既有提交与私有源码修改；当前发布源树在 `/mnt/x/vm2api-wt-search-repair-188`。本条取代上一节“PR 待门禁 / 未发布”的当前状态，但保留其历史记录。
+
+## 2026-10-18 v1.3.190 OpenAI WS / Codex kernel 发布与 HostDzire 部署
+
+- PR [#533](https://github.com/dofastted/vm2api/pull/533) 已合并，merge commit `362c8a4b`；tag `v1.3.190` 已发布。Release workflow `39100256285` 四个 job 全成功，amd64/arm64 镜像和 11 个正式附件完成。应用候选工作树为 `/mnt/x/vm2api-wt-openai-ws-190`，未改原开发工作树用户未提交内容。
+- 新 payload Release `payload-2026.10.18-openai-ws-190` 已公开、非 latest/prerelease。唯一变化的槽位资产是 `kin-codex-kernel`：7892048 字节，SHA256 `0ffec538a57afbe66f13832513ee4c2a27ecc970faa9367c7cb8a13551196dd3`，Ubuntu 22.04 构建，最高 GLIBC `2.34`，适配线上 GLIBC 2.35；其余 payload 与 `payload-2026.10.18-cc296` 一致。`deploy/payload.json` 已更新到新 payload tag。
+- HostDzire 从 1.3.188 切到 1.3.190。候选包 `/tmp/vm2api-overlay-1.3.190-candidate.tgz`，SHA256 `fde74dfb238a9605906e7db2578ffa56b8edcc2b2a87b664fe37e1e774f00eec`；备份 `/opt/vm2api/.deploy-bak-vm2api-1.3.190-20261018T051029Z`。先等运行中请求连续 3 次零 inflight，停止旧 Node / Codex 子进程，应用 overlay，Node 单次重启；Go 前门 PID 保持不变。8/8 容器身份与原状态保持，未 `docker rm`，未执行 Anthropic `wrap-cli/sync`，未覆盖 `routing.json`、`vms/`、`data/` 或 `.env`。
+- `verify-live.py 1.3.190 --auth-mode master --container-policy baseline` 全部通过：version、health、panel master、11 VM、web、8/8 容器 ID/状态、Claude `pong`。新 Codex kernel 已实际启动，线上 `/proc` SHA256 为 `0ffec538…`。live GPT 账号在本次探测时被上游额度闸 `quota_exhausted` 阻止真实 completion；因此不伪称 GPT 模型回答通过，但 kernel health/ELF/hash、鉴权前置、HTTP/WS 路由已部署，回环 HTTP/WS 与 public WS 错误帧验证在发布前通过。
+- nginx 已加窄范围 `location ~ ^/(v1/)?responses$`，直连 Node 8788 并保留 Upgrade；原配置备份 `/opt/vm2api/.deploy-bak-openai-ws-190-20261018T050343Z/nginx/kin.fkcodex.com`，`nginx -t` 和 reload 通过。公网 WS 已能完成握手并返回真实 quota error，而不是 Upgrade 失败。Analytics 与安装元数据默认关闭；本次未启用远程隐私上报。
