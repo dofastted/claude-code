@@ -7,7 +7,9 @@ import { readFileSync } from 'node:fs'
 
 export type CacheTtl = '5m' | '1h'
 
-const KERNEL_CONFIG = process.env.KIN_KERNEL_CONFIG || '/run/kin/kernel.json'
+function kernelConfigPath() {
+  return process.env.KERNEL_CONFIG || process.env.KIN_KERNEL_CONFIG || '/run/kin/kernel.json'
+}
 const MAX_CACHE_MARKERS = 4
 
 export function normalizePanelCacheTtl(value: unknown): CacheTtl | null {
@@ -46,7 +48,42 @@ export function explicitCacheTtl(parts: unknown[]): CacheTtl | null {
   return null
 }
 
-export function readPanelCacheTtl(path = KERNEL_CONFIG): CacheTtl | null {
+
+let lastPanelCchEnabled = true
+
+/** Standalone CLI has no panel file; keep the last valid policy during atomic updates. */
+export function readPanelCchEnabled(path = kernelConfigPath()): boolean {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      if (!('cch_enabled' in parsed)) lastPanelCchEnabled = true
+      else if (typeof parsed.cch_enabled === 'boolean') lastPanelCchEnabled = parsed.cch_enabled
+    }
+  } catch {
+    // Optional in standalone mode; a transient missing file must not flip an existing policy.
+  }
+  return lastPanelCchEnabled
+}
+
+let lastPanelCachedMicrocompactEnabled = false
+
+/** Default off. A missing or invalid panel value must not start deleting cached history. */
+export function readPanelCachedMicrocompactEnabled(path = kernelConfigPath()): boolean {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      if (!('cached_microcompact_enabled' in parsed)) lastPanelCachedMicrocompactEnabled = false
+      else if (typeof parsed.cached_microcompact_enabled === 'boolean') {
+        lastPanelCachedMicrocompactEnabled = parsed.cached_microcompact_enabled
+      }
+    }
+  } catch {
+    // A transient missing file keeps the last valid policy.
+  }
+  return lastPanelCachedMicrocompactEnabled
+}
+
+export function readPanelCacheTtl(path = kernelConfigPath()): CacheTtl | null {
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
     if (!parsed || typeof parsed !== 'object' || !('default_cache_ttl' in parsed)) return null
