@@ -174,6 +174,7 @@ async fn health(State(state): State<WorkerState>) -> Json<Value> {
         "unhealthy_reason": field("unhealthy_reason"),
         "cli_pid": state.cli.as_ref().and_then(|p| p.session_pid("")),
         "cli_version": state.config.cli_version,
+        "memory": runtime,
         "classifier_request_context": field("classifier_request_context").unwrap_or(json!(false)),
     }))
 }

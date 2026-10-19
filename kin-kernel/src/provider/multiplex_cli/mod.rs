@@ -43,6 +43,29 @@ use self::{
     slot::Slot,
 };
 
+fn serialized_request_bytes(request: &MessageRequest) -> Result<usize, KernelError> {
+    struct ByteCounter(usize);
+
+    impl std::io::Write for ByteCounter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .ok_or_else(|| std::io::Error::other("request size overflow"))?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut counter = ByteCounter(0);
+    serde_json::to_writer(&mut counter, request)
+        .map_err(|_| KernelError::Provider("unable to measure request size".into()))?;
+    Ok(counter.0.saturating_add(1024))
+}
+
 #[derive(Clone)]
 pub struct MultiplexConfig {
     pub slot_count: usize,
@@ -1571,8 +1594,8 @@ impl Runtime {
                 )));
             }
         }
-        let request_bytes = request.messages.len().saturating_mul(1024).max(1024);
-        self.memory.admit(request_bytes)?;
+        let request_bytes = serialized_request_bytes(&request)?;
+        let reservation = self.memory.reserve(request_bytes)?;
         let deadline = tokio::time::Instant::now() + self.cfg.submit_wait;
         let (slot_id, job_id) = loop {
             if self.submission_cancelled(&context.request_id, &tx).await {
@@ -1646,7 +1669,7 @@ impl Runtime {
             .lock()
             .await
             .insert(job_id.clone(), request_bytes);
-        self.memory.begin(request_bytes);
+        reservation.commit();
         let n = self.running.fetch_add(1, Ordering::Relaxed) + 1;
         self.peak_running.fetch_max(n, Ordering::Relaxed);
         if let Err(err) = self
@@ -2474,6 +2497,7 @@ mod tests {
             resumed,
             request_id: String::new(),
             request_context: None,
+            auto_compact_window: None,
         }
     }
 
@@ -2499,6 +2523,13 @@ mod tests {
             stream: false,
             ..MessageRequest::default()
         }
+    }
+
+    #[test]
+    fn admission_size_includes_large_single_message() {
+        let request = text_request(&"x".repeat(2 * 1024 * 1024));
+        assert_eq!(request.messages.len(), 1);
+        assert!(serialized_request_bytes(&request).unwrap() > 2 * 1024 * 1024);
     }
 
     fn test_cfg(stall: Duration) -> MultiplexConfig {
