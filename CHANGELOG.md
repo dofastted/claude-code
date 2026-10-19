@@ -2,6 +2,24 @@
 
 记录本地源码、构建和明确标注的部署结果；未标注上线的记录不代表已发布、已部署或已同步到运行中的槽位。
 
+## 2026-10-18 — 协议页集中设置与 CCH 关闭固定五零（未发布）
+
+- 按用户最新要求，原生 sticky 空闲超时从账号池移到设置 → 协议，与 CCH 开关集中；保存 / 放弃 / 刷新与 kernel.json 热投影保持。关闭 CCH 不再移除参数，固定发送 `cch=00000;`（5 个 0），仅开启时计算真实摘要。
+- CLI 正文统一生成五零占位，最终 SDK fetch 显式读取面板开关决定是否 seal；移除旧的“正文是否包含 CCH”订阅门控。密封与 hash 投影只定位 billing 的 CCH，不替换出现在提示词里的相同字面量。
+- 真实 Node finalized envelope → kernel ELF → 新 CLI ELF → 回环上游三轮捕获：关闭 `00000`、开启 `52572`、再关闭 `00000`；CLI PID `66467` 不变、重启 0，UA / 其它 billing 参数及提示词字面量保留。隔离浏览器确认协议页双控件保存 / 放弃 / 刷新，账号池无重复控件，390px 无横向溢出；保存值 false / 300 已投影到 kernel.json。
+- Node 定向 48 passed，billing 定向回归修正后 9 passed；CLI 五文件 38 passed / 152 assertions，编译 0 missing modules；web 41 文件 / 370 passed，TypeScript + Vite build 成功。
+- 候选 CLI `/tmp/vm2api-cch-off-zero-cli`，SHA256 `574d822cd2d18cfa5a73310bfac37460688becf2ae94eccc7a9b0dedf64ab400`。本轮未修改 Rust 行为、未替换交付副本、未发布部署或同步 / 重启现有槽；回环 fixture 不等于真实 Anthropic 账号验收。
+
+## 2026-10-18 — 动态 CCH / sticky slot 设置与 #536（未发布）
+
+- 阅读本地 2.1.296 changelog 后补齐控制面与私有 CLI/kernel：`compatibility.cch_enabled` 默认 true；`inference.session_idle_ttl_seconds` 默认 600，范围 1–86400。保存投影 `kernel.json`，设置变更无需重启。Go 不承载 panel routing schema，OAuth / 遥测的 2.1.293 与 Messages 的 2.1.296 标准 UA 各自保留。
+- CCH 在 billing 中统一补写 / 移除，不按订阅状态分流；native 只在最终紧凑 SDK JSON seal。自产 billing 使用稳定会话 prompt ID 与固定 0/1 索引；billed 官方 / 子代理 system 保留。修复 #536 的内置 official / official_full 默认 scope 与旧模板 agent 回填，caller / custom 显式 scope 不全局删除。
+- kernel 通过显式 `KERNEL_CONFIG` 把同一配置路径交给 CLI；sticky idle 按文件变化热读，保留上次有效值，活动任务不回收，修改期限不重置最后完成时间。真实 ELF 的 JSONL 分配捕获确认同会话先复用 `s03`，600 → 1 秒后换为 `s04`；默认巡检约 2.5 秒，CLI PID 不变、重启 0、关闭槽 0。
+- Node 定向 254 passed；CLI 五文件 39 passed / 152 assertions / 0 missing modules；Rust release tests 118 passed / 1 ignored，release build 成功（既有 continuation_ttl_secs warning）；web 41 文件 / 370 passed，最终 TypeScript + Vite build 成功，界面机械检查无发现。Go worker `go test -race ./...` 与 api-kernel `go test ./...` 均通过。
+- Node 全量并行回归有 1 项时序失败：`pool-scheduler` 的 40ms 冷却 / 200ms 等待用例在并行编译下失败，单独执行 42.9ms 通过。没有修改该调度器、放宽时限或把隔离通过说成全量通过。
+- 隔离真实 panel API 验证新键缺省值、15 个非法输入、86400 边界、kernel.json 投影与混合非法 patch 零部分保存；真实浏览器验证 CCH 保存 / 刷新、空闲秒数放弃回到 600、保存 300 后刷新及投影一致，桌面 / 390px 页面无横向溢出。真实 Node handler → kernel → CLI → 回环上游完成 6 次捕获，覆盖最短 official_full 无 scope、非订阅 billing、CCH 开关 / 缺失补写、固定 UA 与原生空闲热回收。
+- 已验证候选 CLI：`/tmp/vm2api-dynamic-config-cli`，SHA256 `afc21db970642ef73999b66c3e09795c79bded6f365223c3cd7f0b74bf533fef`；kernel：`kin-kernel/target/release/kernel`，SHA256 `97959c164721be03478b057473d1da8206ee42ddae609dbf3a85327915a824b7`。未覆盖交付副本、未修改 payload manifest、未发布、未部署或同步 / 重启现有槽；未用真实 Anthropic 账号。
+
 ## 2026-10-18 — v1.3.188 已部署、合并并正式发布
 
 - 用户本轮明确选择“批准替代门禁并继续发布”，允许本次以真实 master 管理鉴权 + 原状态保留验收替代陈旧用户名密码检查；没有重置或修改管理员凭据，不声称密码登录通过。`verify-live.py` 新增显式 `--auth-mode master --container-policy baseline`，默认仍为 password / up；授权模式在最终 1.3.188 候选上真实退出 0。
