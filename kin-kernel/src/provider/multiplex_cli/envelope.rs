@@ -51,13 +51,13 @@ impl Default for EnvelopeConfig {
 }
 
 pub fn config_path() -> PathBuf {
-    env::var("KIN_ENVELOPE_PATH")
+    env::var("ENVELOPE_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp/kin-cli/envelope.json"))
+        .unwrap_or_else(|_| PathBuf::from("/tmp/cli/envelope.json"))
 }
 
 pub fn default_timezone() -> String {
-    env::var("KIN_SLOT_TZ")
+    env::var("SLOT_TZ")
         .or_else(|_| env::var("TZ"))
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -75,7 +75,7 @@ pub fn load() -> EnvelopeConfig {
         return cfg;
     }
     let mut cfg = EnvelopeConfig::default();
-    if let Ok(mode) = env::var("KIN_SYSTEM_MODE") {
+    if let Ok(mode) = env::var("SYSTEM_MODE") {
         cfg.mode = SystemMode::parse(&mode);
     }
     cfg

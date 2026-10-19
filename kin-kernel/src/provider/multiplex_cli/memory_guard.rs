@@ -11,7 +11,7 @@
 //!
 //! Admission uses kernel+Claude RSS by default. The sandbox cgroup often
 //! includes unrelated processes (builds, traces) and would false-drain.
-//! Set KIN_MEM_OBSERVED=cgroup to classify on memory.current instead.
+//! Set MEM_OBSERVED=cgroup to classify on memory.current instead.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
@@ -46,27 +46,27 @@ impl MemoryLimits {
 
     pub fn from_env() -> Self {
         let mut limits = Self::production();
-        if let Ok(value) = std::env::var("KIN_MEM_SOFT_BYTES")
+        if let Ok(value) = std::env::var("MEM_SOFT_BYTES")
             && let Ok(parsed) = value.parse()
         {
             limits.soft = parsed;
         }
-        if let Ok(value) = std::env::var("KIN_MEM_DRAIN_BYTES")
+        if let Ok(value) = std::env::var("MEM_DRAIN_BYTES")
             && let Ok(parsed) = value.parse()
         {
             limits.drain = parsed;
         }
-        if let Ok(value) = std::env::var("KIN_MEM_REJECT_BYTES")
+        if let Ok(value) = std::env::var("MEM_REJECT_BYTES")
             && let Ok(parsed) = value.parse()
         {
             limits.reject = parsed;
         }
-        if let Ok(value) = std::env::var("KIN_MAX_INFLIGHT_PAYLOAD")
+        if let Ok(value) = std::env::var("MAX_INFLIGHT_PAYLOAD")
             && let Ok(parsed) = value.parse()
         {
             limits.max_inflight_payload = parsed;
         }
-        if let Ok(value) = std::env::var("KIN_MAX_PENDING")
+        if let Ok(value) = std::env::var("MAX_PENDING")
             && let Ok(parsed) = value.parse()
         {
             limits.max_pending = parsed;
@@ -202,7 +202,7 @@ impl MemoryGuard {
 
 fn observe_cgroup() -> bool {
     matches!(
-        std::env::var("KIN_MEM_OBSERVED").as_deref(),
+        std::env::var("MEM_OBSERVED").as_deref(),
         Ok("cgroup") | Ok("Cgroup") | Ok("CGROUP")
     )
 }
@@ -219,6 +219,7 @@ fn classify(observed: u64, limits: &MemoryLimits) -> Admission {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn rss_of(pid: u32) -> Option<u64> {
     if pid == 0 {
         return None;
@@ -228,8 +229,45 @@ fn rss_of(pid: u32) -> Option<u64> {
     Some(pages.saturating_mul(page_size()))
 }
 
+#[cfg(not(target_os = "macos"))]
 fn page_size() -> u64 {
     4096
+}
+
+/// Darwin has no procfs; without this the guard would observe 0 bytes and never shed load.
+#[cfg(target_os = "macos")]
+fn rss_of(pid: u32) -> Option<u64> {
+    /// `struct proc_taskinfo` from <sys/proc_info.h>; only the resident size is read.
+    #[repr(C)]
+    struct ProcTaskInfo {
+        _virtual_size: u64,
+        resident_size: u64,
+        _times_and_threads: [u64; 4],
+        _counters: [i32; 12],
+    }
+    const PROC_PIDTASKINFO: i32 = 4;
+    unsafe extern "C" {
+        fn proc_pidinfo(
+            pid: i32,
+            flavor: i32,
+            arg: u64,
+            buffer: *mut std::ffi::c_void,
+            size: i32,
+        ) -> i32;
+    }
+    if pid == 0 {
+        return None;
+    }
+    let pid = i32::try_from(pid).ok()?;
+    let mut info = std::mem::MaybeUninit::<ProcTaskInfo>::zeroed();
+    let size = std::mem::size_of::<ProcTaskInfo>() as i32;
+    // SAFETY: the buffer is a writable ProcTaskInfo of exactly `size` bytes.
+    let written = unsafe { proc_pidinfo(pid, PROC_PIDTASKINFO, 0, info.as_mut_ptr().cast(), size) };
+    if written != size {
+        return None;
+    }
+    // SAFETY: proc_pidinfo filled all `size` bytes.
+    Some(unsafe { info.assume_init() }.resident_size)
 }
 
 fn cgroup_current() -> Option<u64> {

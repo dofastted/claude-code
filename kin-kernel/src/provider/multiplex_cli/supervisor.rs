@@ -17,6 +17,7 @@ pub struct SpawnSpec {
     pub slot_count: usize,
     pub session_dir: PathBuf,
     pub desired_config_hash: Option<String>,
+    pub kernel_config_path: Option<PathBuf>,
     pub reuse_credentials: bool,
 }
 
@@ -59,22 +60,27 @@ pub async fn spawn(spec: &SpawnSpec) -> Result<Supervised, KernelError> {
     apply_proxy_env(&mut cmd)?;
     cmd.args(native_cli_args(&spec.model));
     let layout = crate::provider::multiplex_cli::envelope::load();
-    cmd.env("CLAUDE_CODE_KIN_NATIVE_SLOTS", &n)
+    cmd.env("CLAUDE_CODE_NATIVE_SLOTS", &n)
         .env("CLAUDE_CODE_SYSTEM_LAYOUT", layout.mode.as_str())
         .env("CLAUDE_CODE_TIMEZONE", &layout.timezone);
+    if let Some(path) = &spec.kernel_config_path {
+        cmd.env("KERNEL_CONFIG", path);
+    }
     if let Some(hash) = &spec.desired_config_hash {
-        cmd.env("CLAUDE_CODE_KIN_CONFIG_HASH", hash);
+        cmd.env("CLAUDE_CODE_CONFIG_HASH", hash);
     }
     cmd.current_dir(&spec.session_dir)
         .env("CLAUDE_CONFIG_DIR", &spec.session_dir)
         .env(
             "CLAUDE_CODE_VERSION",
-            env::var("CLAUDE_CODE_VERSION").unwrap_or_else(|_| "2.1.284".into()),
+            env::var("CLAUDE_CODE_VERSION").unwrap_or_else(|_| "2.1.296".into()),
         )
         .env("CLAUDE_CODE_ENTRYPOINT", "sdk-cli")
         .env("USER_TYPE", "external")
         .env("CLAUDE_CODE_DISABLE_TELEMETRY", "1")
-        .env("CLAUDE_CODE_GATEWAY_HINT_HEADERS", "1");
+        .env("CLAUDE_CODE_GATEWAY_HINT_HEADERS", "1")
+        // The host's Go Refresher is the sole RT writer; the CLI only re-reads.
+        .env("CLAUDE_CODE_HOST_REFRESH", "1");
     apply_envelope_env(&mut cmd);
     if let Some(auth) = &auth {
         auth.apply_tokio(&mut cmd);
@@ -83,7 +89,7 @@ pub async fn spawn(spec: &SpawnSpec) -> Result<Supervised, KernelError> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    if let Ok(debug) = env::var("KIN_CLAUDE_DEBUG_FILE") {
+    if let Ok(debug) = env::var("CLAUDE_DEBUG_FILE") {
         cmd.arg("--debug-file").arg(debug);
     }
     let child = cmd
@@ -96,17 +102,17 @@ pub async fn spawn(spec: &SpawnSpec) -> Result<Supervised, KernelError> {
 fn apply_envelope_env(cmd: &mut Command) {
     let cfg = crate::provider::multiplex_cli::envelope::load();
     let path = crate::provider::multiplex_cli::envelope::config_path();
-    cmd.env("KIN_SYSTEM_MODE", cfg.mode.as_str())
-        .env("KIN_SLOT_TZ", &cfg.timezone)
+    cmd.env("SYSTEM_MODE", cfg.mode.as_str())
+        .env("SLOT_TZ", &cfg.timezone)
         .env("TZ", &cfg.timezone)
-        .env("KIN_ENVELOPE_PATH", path.as_os_str())
-        .env("CLAUDE_CODE_KIN_ENVELOPE", cfg.mode.as_str());
+        .env("ENVELOPE_PATH", path.as_os_str())
+        .env("CLAUDE_CODE_ENVELOPE", cfg.mode.as_str());
 }
 
 fn apply_proxy_env(cmd: &mut Command) -> Result<(), KernelError> {
     match proxy_env_plan(
-        env::var("KIN_HTTPS_PROXY").ok().as_deref(),
-        env::var("KIN_SOCKS5").ok().as_deref(),
+        env::var("BRIDGE_HTTPS_PROXY").ok().as_deref(),
+        env::var("SOCKS5").ok().as_deref(),
     )? {
         ProxyEnvPlan::Http(http) => {
             cmd.env("HTTPS_PROXY", &http)
@@ -141,7 +147,7 @@ fn proxy_env_plan(
         && socks5.trim().starts_with("socks")
     {
         return Err(KernelError::Provider(
-            "Claude CLI cannot use SOCKS5 as HTTPS_PROXY; set KIN_HTTPS_PROXY to an HTTP CONNECT bridge".into(),
+            "Claude CLI cannot use SOCKS5 as HTTPS_PROXY; set BRIDGE_HTTPS_PROXY to an HTTP CONNECT bridge".into(),
         ));
     }
     Ok(ProxyEnvPlan::None)

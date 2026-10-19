@@ -57,21 +57,21 @@ mod tests {
     #[test]
     fn default_is_public_http() {
         assert_eq!(
-            parse_args(&args(&["kin-kernel"])).unwrap(),
+            parse_args(&args(&["kernel"])).unwrap(),
             LaunchMode::PublicHttp
         );
     }
 
     #[test]
     fn gateway_worker_requires_config() {
-        let err = parse_args(&args(&["kin-kernel", "--gateway-worker"])).unwrap_err();
+        let err = parse_args(&args(&["kernel", "--gateway-worker"])).unwrap_err();
         assert!(err.contains("--config"));
     }
 
     #[test]
     fn gateway_worker_reads_config_path() {
         let mode = parse_args(&args(&[
-            "kin-kernel",
+            "kernel",
             "--gateway-worker",
             "--config",
             "/tmp/worker.json",

@@ -19,8 +19,6 @@ pub struct Config {
     pub max_session_bytes: usize,
     pub session_ttl: Duration,
     pub continuation_ttl: Duration,
-    pub slot_max_jobs: u32,
-    pub slot_max_lifetime: Duration,
     pub default_tenant: String,
     pub expose_slot_header: bool,
     pub provider: String,
@@ -33,32 +31,29 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
-        let listen_addr = env::var("KIN_KERNEL_ADDR")
+        let listen_addr = env::var("KERNEL_ADDR")
             .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
             .parse()?;
         // One kernel runtime == one Claude OS process. Slot count is --max-procs.
-        let worker_count = parse_env("KIN_WORKER_COUNT", 1)?;
-        let slots_per_worker = parse_env("KIN_SLOTS_PER_WORKER", DEFAULT_SLOTS)?;
-        let max_body_bytes = parse_env("KIN_MAX_BODY_BYTES", 8 * 1024 * 1024)?;
-        let max_tool_result_bytes = parse_env("KIN_MAX_TOOL_RESULT_BYTES", MAX_TOOL_RESULT_BYTES)?;
-        let max_session_bytes = parse_env("KIN_MAX_SESSION_BYTES", 16 * 1024 * 1024)?;
-        let session_ttl_seconds = parse_env("KIN_SESSION_TTL_SECONDS", 600)?;
-        let continuation_ttl_seconds = parse_env("KIN_CONTINUATION_TTL_SECONDS", 600)?;
-        let slot_max_jobs = parse_env("KIN_SLOT_MAX_JOBS", 50u32)?;
-        let slot_max_lifetime = Duration::from_secs(parse_env("KIN_SLOT_MAX_LIFETIME_SECS", 1800)?);
+        let worker_count = parse_env("WORKER_COUNT", 1)?;
+        let slots_per_worker = parse_env("SLOTS_PER_WORKER", DEFAULT_SLOTS)?;
+        let max_body_bytes = parse_env("MAX_BODY_BYTES", 8 * 1024 * 1024)?;
+        let max_tool_result_bytes = parse_env("MAX_TOOL_RESULT_BYTES", MAX_TOOL_RESULT_BYTES)?;
+        let max_session_bytes = parse_env("MAX_SESSION_BYTES", 16 * 1024 * 1024)?;
+        let session_ttl_seconds = parse_env("SESSION_TTL_SECONDS", 600)?;
+        let continuation_ttl_seconds = parse_env("CONTINUATION_TTL_SECONDS", 600)?;
         if worker_count == 0
             || slots_per_worker == 0
             || max_body_bytes == 0
             || max_session_bytes == 0
             || session_ttl_seconds == 0
             || continuation_ttl_seconds == 0
-            || slot_max_jobs == 0
         {
             return Err("worker, slot, body, and TTL settings must be positive".into());
         }
         if slots_per_worker > 20 {
             return Err(
-                "Claude official subagent cap is 20; KIN_SLOTS_PER_WORKER must be <= 20".into(),
+                "Claude official subagent cap is 20; SLOTS_PER_WORKER must be <= 20".into(),
             );
         }
 
@@ -71,12 +66,10 @@ impl Config {
             max_session_bytes,
             session_ttl: Duration::from_secs(session_ttl_seconds),
             continuation_ttl: Duration::from_secs(continuation_ttl_seconds),
-            slot_max_jobs,
-            slot_max_lifetime,
-            default_tenant: env::var("KIN_DEFAULT_TENANT").unwrap_or_else(|_| "demo".to_string()),
-            expose_slot_header: parse_bool_env("KIN_EXPOSE_SLOT_HEADER", true)?,
-            provider: env::var("KIN_PROVIDER").unwrap_or_else(|_| "mock".to_string()),
-            desired_config_hash: env::var("KIN_DESIRED_CONFIG_HASH").ok(),
+            default_tenant: env::var("DEFAULT_TENANT").unwrap_or_else(|_| "demo".to_string()),
+            expose_slot_header: parse_bool_env("EXPOSE_SLOT_HEADER", true)?,
+            provider: env::var("PROVIDER").unwrap_or_else(|_| "mock".to_string()),
+            desired_config_hash: env::var("DESIRED_CONFIG_HASH").ok(),
         })
     }
 }
@@ -104,9 +97,9 @@ fn parse_bool_env(name: &str, default: bool) -> Result<bool, Box<dyn std::error:
 }
 
 pub fn client_stall_timeout_from_env() -> Result<Duration, Box<dyn std::error::Error>> {
-    let seconds = parse_env("KIN_CLIENT_STALL_SECS", DEFAULT_CLIENT_STALL_SECS)?;
+    let seconds = parse_env("CLIENT_STALL_SECS", DEFAULT_CLIENT_STALL_SECS)?;
     if seconds == 0 {
-        return Err("KIN_CLIENT_STALL_SECS must be positive".into());
+        return Err("CLIENT_STALL_SECS must be positive".into());
     }
     Ok(Duration::from_secs(seconds))
 }
@@ -120,9 +113,9 @@ fn positive_secs_env(name: &str, default: u64) -> Result<Duration, Box<dyn std::
 }
 
 pub fn job_idle_timeout_from_env() -> Result<Duration, Box<dyn std::error::Error>> {
-    positive_secs_env("KIN_JOB_IDLE_SECS", DEFAULT_JOB_IDLE_SECS)
+    positive_secs_env("JOB_IDLE_SECS", DEFAULT_JOB_IDLE_SECS)
 }
 
 pub fn cancel_ack_timeout_from_env() -> Result<Duration, Box<dyn std::error::Error>> {
-    positive_secs_env("KIN_CANCEL_ACK_SECS", DEFAULT_CANCEL_ACK_SECS)
+    positive_secs_env("CANCEL_ACK_SECS", DEFAULT_CANCEL_ACK_SECS)
 }

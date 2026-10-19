@@ -27,8 +27,7 @@ use super::hop::{HopClient, HopResponse, copyable_response_header};
 use super::sse::{PumpOptions, PumpResult, pump};
 use crate::provider::Provider;
 
-const TRAILER_NAMES: &str =
-    "X-Kin-Terminal-State, X-Kin-Event-Count, X-Kin-Usage, X-Kin-Model, X-Kin-Stop-Reason";
+const TRAILER_NAMES: &str = "X-Terminal-State, X-Event-Count, X-Usage, X-Model, X-Stop-Reason";
 
 #[derive(Clone)]
 pub struct WorkerState {
@@ -67,7 +66,7 @@ struct CancelRequest {
 pub async fn run(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let config = WorkerConfig::load(config_path)?;
     let (hop, cli) = if config.is_local_cli() {
-        let provider = cli_hop::provider_from_config(&config);
+        let provider = cli_hop::provider_from_config(&config, config_path);
         provider
             .boot()
             .await
@@ -89,7 +88,7 @@ pub async fn run(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         vm_id = %state.config.vm_id,
         provider = %state.config.provider,
         socket = %socket.display(),
-        "kin-kernel gateway-worker listening"
+        "kernel gateway-worker listening"
     );
     prepare_socket(&socket)?;
     let listener = tokio::net::UnixListener::bind(&socket)?;
@@ -127,7 +126,7 @@ async fn require_token(
     }
     let provided = request
         .headers()
-        .get("X-Kin-Internal-Token")
+        .get("X-Internal-Token")
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
     if !token_eq(expected, provided) {
@@ -334,7 +333,7 @@ async fn buffer_json(
     validate_message_json(&data)?;
     let mut headers = upstream.headers;
     headers.insert(
-        HeaderName::from_static("x-kin-terminal-state"),
+        HeaderName::from_static("x-terminal-state"),
         HeaderValue::from_static("verified"),
     );
     Ok((upstream.status, headers, data).into_response())
@@ -372,7 +371,7 @@ async fn verified_stream(
         HeaderValue::from_static("text/event-stream"),
     );
     headers.insert(
-        HeaderName::from_static("x-kin-terminal-state"),
+        HeaderName::from_static("x-terminal-state"),
         HeaderValue::from_static("verified"),
     );
     apply_stream_meta(&mut headers, &outcome.result);
@@ -439,7 +438,7 @@ async fn pump_realtime(
         "verified"
     };
     let _ = trailers.insert(
-        HeaderName::from_static("x-kin-terminal-state"),
+        HeaderName::from_static("x-terminal-state"),
         HeaderValue::from_str(state).unwrap_or(HeaderValue::from_static("incomplete")),
     );
     apply_stream_meta(&mut trailers, &outcome.result);
@@ -460,7 +459,7 @@ fn incomplete_event(message: &str) -> Vec<u8> {
 
 fn apply_stream_meta(headers: &mut HeaderMap, result: &PumpResult) {
     let _ = headers.insert(
-        HeaderName::from_static("x-kin-event-count"),
+        HeaderName::from_static("x-event-count"),
         HeaderValue::from_str(&result.event_count.to_string())
             .unwrap_or(HeaderValue::from_static("0")),
     );
@@ -468,17 +467,17 @@ fn apply_stream_meta(headers: &mut HeaderMap, result: &PumpResult) {
         && let Ok(raw) = serde_json::to_string(&result.usage)
         && let Ok(value) = HeaderValue::from_str(&raw)
     {
-        headers.insert(HeaderName::from_static("x-kin-usage"), value);
+        headers.insert(HeaderName::from_static("x-usage"), value);
     }
     if !result.model.is_empty()
         && let Ok(value) = HeaderValue::from_str(&result.model)
     {
-        headers.insert(HeaderName::from_static("x-kin-model"), value);
+        headers.insert(HeaderName::from_static("x-model"), value);
     }
     if !result.stop_reason.is_empty()
         && let Ok(value) = HeaderValue::from_str(&result.stop_reason)
     {
-        headers.insert(HeaderName::from_static("x-kin-stop-reason"), value);
+        headers.insert(HeaderName::from_static("x-stop-reason"), value);
     }
 }
 
@@ -873,7 +872,7 @@ mod tests {
             .method("POST")
             .uri("/internal/v1/messages");
         if let Some(token) = token {
-            builder = builder.header("X-Kin-Internal-Token", token);
+            builder = builder.header("X-Internal-Token", token);
         }
         let request = builder
             .header("content-type", "application/json")
@@ -966,13 +965,13 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
             headers
-                .get("x-kin-terminal-state")
+                .get("x-terminal-state")
                 .and_then(|v| v.to_str().ok()),
             Some("verified")
         );
         let usage: Value = serde_json::from_str(
             headers
-                .get("x-kin-usage")
+                .get("x-usage")
                 .and_then(|v| v.to_str().ok())
                 .unwrap(),
         )
@@ -984,13 +983,11 @@ mod tests {
         assert_eq!(usage["cache_creation"]["ephemeral_5m_input_tokens"], 5);
         assert_eq!(usage["cache_creation"]["ephemeral_1h_input_tokens"], 2);
         assert_eq!(
-            headers.get("x-kin-model").and_then(|v| v.to_str().ok()),
+            headers.get("x-model").and_then(|v| v.to_str().ok()),
             Some("claude-haiku-4-5-20251001")
         );
         assert_eq!(
-            headers
-                .get("x-kin-stop-reason")
-                .and_then(|v| v.to_str().ok()),
+            headers.get("x-stop-reason").and_then(|v| v.to_str().ok()),
             Some("end_turn")
         );
     }
@@ -1019,7 +1016,7 @@ mod tests {
         assert!(text.contains("upstream_stream_incomplete"), "{text}");
         let state = trailers
             .as_ref()
-            .and_then(|t| t.get("x-kin-terminal-state"))
+            .and_then(|t| t.get("x-terminal-state"))
             .and_then(|v| v.to_str().ok());
         assert_eq!(state, Some("incomplete"));
     }
@@ -1030,7 +1027,7 @@ mod tests {
         let request = HttpRequest::builder()
             .method("POST")
             .uri("/internal/v1/messages")
-            .header("X-Kin-Internal-Token", TOKEN)
+            .header("X-Internal-Token", TOKEN)
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::to_vec(&envelope(true, "realtime")).unwrap(),
@@ -1049,7 +1046,7 @@ mod tests {
         let collected = response.into_body().collect().await.unwrap();
         let usage = collected
             .trailers()
-            .and_then(|t| t.get("x-kin-usage"))
+            .and_then(|t| t.get("x-usage"))
             .and_then(|v| v.to_str().ok())
             .unwrap();
         let usage: Value = serde_json::from_str(usage).unwrap();
@@ -1062,7 +1059,7 @@ mod tests {
         let request = HttpRequest::builder()
             .method("POST")
             .uri("/internal/v1/messages")
-            .header("X-Kin-Internal-Token", TOKEN)
+            .header("X-Internal-Token", TOKEN)
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::to_vec(&envelope(true, "realtime")).unwrap(),
@@ -1073,7 +1070,7 @@ mod tests {
         let collected = response.into_body().collect().await.unwrap();
         let state = collected
             .trailers()
-            .and_then(|trailers| trailers.get("x-kin-terminal-state"))
+            .and_then(|trailers| trailers.get("x-terminal-state"))
             .and_then(|value| value.to_str().ok());
         assert_eq!(state, Some("incomplete"));
         assert!(
@@ -1095,7 +1092,7 @@ mod tests {
         stream
             .write_all(
                 format!(
-                    "GET /internal/health HTTP/1.1\r\nHost: localhost\r\nX-Kin-Internal-Token: {TOKEN}\r\nConnection: close\r\n\r\n"
+                    "GET /internal/health HTTP/1.1\r\nHost: localhost\r\nX-Internal-Token: {TOKEN}\r\nConnection: close\r\n\r\n"
                 )
                 .as_bytes(),
             )
@@ -1108,7 +1105,7 @@ mod tests {
         let mut stream = wait_connect(&socket).await;
         let payload = serde_json::to_vec(&envelope(false, "realtime")).unwrap();
         let req = format!(
-            "POST /internal/v1/messages HTTP/1.1\r\nHost: localhost\r\nX-Kin-Internal-Token: {TOKEN}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "POST /internal/v1/messages HTTP/1.1\r\nHost: localhost\r\nX-Internal-Token: {TOKEN}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             payload.len()
         );
         stream.write_all(req.as_bytes()).await.unwrap();
@@ -1118,8 +1115,8 @@ mod tests {
         let text = String::from_utf8_lossy(&buf);
         assert!(text.contains("\"id\":\"msg_1\""), "{text}");
         assert!(
-            text.contains("X-Kin-Terminal-State: verified")
-                || text.contains("x-kin-terminal-state: verified"),
+            text.contains("X-Terminal-State: verified")
+                || text.contains("x-terminal-state: verified"),
             "{text}"
         );
     }

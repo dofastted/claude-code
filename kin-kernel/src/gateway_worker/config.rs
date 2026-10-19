@@ -6,8 +6,8 @@ use url::Url;
 
 const DEFAULT_ANTHROPIC_BASE: &str = "https://api.anthropic.com";
 const DEFAULT_OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
-const DEFAULT_SOCKET: &str = "/run/kin/worker.sock";
-const DEFAULT_CREDENTIAL: &str = "/home/kincli/.claude/credentials.json";
+const DEFAULT_SOCKET: &str = "/run/guest/worker.sock";
+const DEFAULT_CREDENTIAL: &str = "/home/guest/.claude/credentials.json";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorkerConfig {
@@ -62,6 +62,12 @@ pub struct WorkerConfig {
     pub cli_version: String,
     #[serde(default)]
     pub default_cache_ttl: String,
+    #[serde(default = "default_session_idle_ttl_seconds")]
+    pub session_idle_ttl_seconds: i64,
+}
+
+fn default_session_idle_ttl_seconds() -> i64 {
+    600
 }
 
 impl WorkerConfig {
@@ -165,6 +171,9 @@ impl WorkerConfig {
                 "default_cache_ttl must be 5m or 1h, got \"{}\"",
                 self.default_cache_ttl
             ));
+        }
+        if !(1..=86400).contains(&self.session_idle_ttl_seconds) {
+            return Err("session_idle_ttl_seconds must be 1..=86400".into());
         }
         match self.provider.trim() {
             "anthropic_api" => {}

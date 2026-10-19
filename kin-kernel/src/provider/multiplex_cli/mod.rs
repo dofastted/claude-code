@@ -1,7 +1,7 @@
 //! One Claude OS process, N slots.
 //!
-//! Jobs go to the CLI's stdin as `kin_job_start`; the CLI hosts the slots and
-//! its stdout `kin_stream_event` / `kin_job_done` frames are the only
+//! Jobs go to the CLI's stdin as `job_start`; the CLI hosts the slots and
+//! its stdout `stream_event` / `job_done` frames are the only
 //! authority for a job's text and terminal state.
 
 pub mod bootstrap;
@@ -21,7 +21,7 @@ use std::{
         Arc, OnceLock, Weak,
         atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use async_trait::async_trait;
@@ -40,7 +40,7 @@ use self::{
     job::{Job, new_id},
     memory_guard::MemoryGuard,
     scheduler::SlotScheduler,
-    slot::{Slot, SlotPhase},
+    slot::Slot,
 };
 
 #[derive(Clone)]
@@ -50,15 +50,14 @@ pub struct MultiplexConfig {
     pub bin: PathBuf,
     pub mock_bin: bool,
     pub model: String,
-    pub max_jobs_per_slot: u32,
-    pub slot_max_lifetime: Duration,
     pub session_idle_ttl: Duration,
+    pub panel_config_path: Option<PathBuf>,
     pub simulate_latency: Duration,
     pub continuation_ttl_secs: i64,
     pub client_stall_timeout: Duration,
     /// A job with no CLI frame for this long is cancelled (slot watchdog).
     pub job_idle_timeout: Duration,
-    /// A cancelled slot with no `kin_cancel_ack` after this long is closed.
+    /// A cancelled slot with no `cancel_ack` after this long is closed.
     pub cancel_ack_timeout: Duration,
     pub submit_wait: Duration,
     pub desired_config_hash: Option<String>,
@@ -73,7 +72,7 @@ pub struct MultiplexConfig {
 /// pings the CLI process; L3 restarts the CLI process inside this kernel.
 #[derive(Clone, Debug)]
 pub struct RecoveryConfig {
-    /// `kin_cancel` resends after a slot is closed; each waits twice as long.
+    /// `cancel` resends after a slot is closed; each waits twice as long.
     pub cancel_resends: u32,
     /// Unanswered pings before the CLI process counts as dead.
     pub probe_attempts: u32,
@@ -107,19 +106,19 @@ impl Default for RecoveryConfig {
 
 impl MultiplexConfig {
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
-        let slot_count = env::var("KIN_SLOTS_PER_WORKER")
+        let slot_count = env::var("SLOTS_PER_WORKER")
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(20)
             .clamp(1, 20);
-        let bin = env::var("KIN_CLAUDE_BIN")
+        let bin = env::var("CLAUDE_BIN")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
                 PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()))
-                    .join("../../scripts/kin-node-kernel/mock-claude.mjs")
+                    .join("../../scripts/node-kernel/mock-claude.mjs")
             });
         let mock_bin = bin.to_string_lossy().contains("mock-claude");
-        let simulate = env::var("KIN_MULTIPLEX_SIMULATE")
+        let simulate = env::var("MULTIPLEX_SIMULATE")
             .map(|value| value != "0")
             .unwrap_or(mock_bin);
         Ok(Self {
@@ -127,25 +126,16 @@ impl MultiplexConfig {
             simulate,
             mock_bin,
             bin,
-            model: env::var("KIN_CLI_MODEL").unwrap_or_else(|_| "claude-sonnet-5-5".into()),
-            max_jobs_per_slot: env::var("KIN_SLOT_MAX_JOBS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(50),
-            slot_max_lifetime: Duration::from_secs(
-                env::var("KIN_SLOT_MAX_LIFETIME_SECS")
-                    .ok()
-                    .and_then(|value| value.parse().ok())
-                    .unwrap_or(1800),
-            ),
+            model: env::var("CLI_MODEL").unwrap_or_else(|_| "claude-sonnet-5-5".into()),
             session_idle_ttl: Duration::from_secs(
-                env::var("KIN_SESSION_IDLE_TTL_SECS")
+                env::var("SESSION_IDLE_TTL_SECS")
                     .ok()
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(600),
             ),
+            panel_config_path: None,
             simulate_latency: Duration::from_millis(
-                env::var("KIN_SIMULATE_LATENCY_MS")
+                env::var("SIMULATE_LATENCY_MS")
                     .ok()
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(40),
@@ -155,12 +145,12 @@ impl MultiplexConfig {
             job_idle_timeout: crate::config::job_idle_timeout_from_env()?,
             cancel_ack_timeout: crate::config::cancel_ack_timeout_from_env()?,
             submit_wait: Duration::from_millis(
-                env::var("KIN_SUBMIT_WAIT_MS")
+                env::var("SUBMIT_WAIT_MS")
                     .ok()
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(2000),
             ),
-            desired_config_hash: env::var("KIN_DESIRED_CONFIG_HASH").ok(),
+            desired_config_hash: env::var("DESIRED_CONFIG_HASH").ok(),
             session_dir: None,
             recovery: RecoveryConfig::default(),
         })
@@ -170,6 +160,7 @@ impl MultiplexConfig {
 pub struct Runtime {
     pub pid: AtomicU32,
     cfg: MultiplexConfig,
+    session_idle: Mutex<SessionIdleConfig>,
     slots: Mutex<Vec<Slot>>,
     sched: Mutex<SlotScheduler>,
     jobs: Mutex<HashMap<String, Job>>,
@@ -186,18 +177,18 @@ pub struct Runtime {
     host_unavailable: AtomicBool,
     native_host: Mutex<Option<NativeHostInfo>>,
     classifier_context_supported: AtomicBool,
-    /// P0(5.4): per-job aggregation of native `kin_stream_event` SSE into
+    /// P0(5.4): per-job aggregation of native `stream_event` SSE into
     /// real `{id,name,input}` content blocks, for `stream:false` clients and
     /// for populating `complete_job()`'s response content under
     /// native/native_messages. Only touched from the native code paths.
     stream_assemblers: Mutex<HashMap<String, StreamAssembler>>,
-    /// Set when `validate_host_ready()` rejects a `kin_host_ready` handshake
+    /// Set when `validate_host_ready()` rejects a `host_ready` handshake
     /// due to config_hash mismatch (design.md §6, AC14). Surfaced via
     /// `Provider::config_hash_mismatch()` for `/readyz`.
     config_hash_mismatch: AtomicBool,
     /// Last CLI frame per live job. The watchdog cancels jobs gone silent.
     job_seen: Mutex<HashMap<String, Instant>>,
-    /// slot_id -> the `kin_cancel` still waiting for its ack.
+    /// slot_id -> the `cancel` still waiting for its ack.
     pending_cancels: Mutex<HashMap<String, PendingCancel>>,
     /// Early cancels can overtake registration on a different HTTP connection.
     cancelled_requests: Mutex<HashMap<String, Instant>>,
@@ -219,6 +210,16 @@ pub struct Runtime {
     cli_restarts: AtomicU32,
     /// Set once the restart budget is spent; the kernel stays down and reports unhealthy.
     gave_up: std::sync::Mutex<Option<String>>,
+}
+
+struct SessionIdleConfig {
+    ttl: Duration,
+    stamp: Option<(SystemTime, u64)>,
+}
+
+#[derive(serde::Deserialize)]
+struct PanelSessionIdle {
+    session_idle_ttl_seconds: Option<u64>,
 }
 
 struct PendingCancel {
@@ -410,6 +411,10 @@ impl Runtime {
     pub fn new(cfg: MultiplexConfig) -> Arc<Self> {
         Arc::new_cyclic(|me| Self {
             pid: AtomicU32::new(0),
+            session_idle: Mutex::new(SessionIdleConfig {
+                ttl: cfg.session_idle_ttl,
+                stamp: None,
+            }),
             cfg,
             slots: Mutex::new(Vec::new()),
             sched: Mutex::new(SlotScheduler::new()),
@@ -519,7 +524,7 @@ impl Runtime {
             let sink = self.sinks.lock().await.get(&job_id).cloned();
             match sink {
                 // job_egress sees the failure terminal, fails the client
-                // stream and sends kin_cancel.
+                // stream and sends cancel.
                 Some(sink) if sink.set_terminal(Terminal::Failed(error)) => {
                     self.job_seen.lock().await.remove(&job_id);
                 }
@@ -554,13 +559,13 @@ impl Runtime {
             }
         }
         for slot_id in newly_closed {
-            tracing::error!(%slot_id, "kin_cancel not acked; closing slot and resending cancel");
+            tracing::error!(%slot_id, "cancel not acked; closing slot and resending cancel");
             self.retire_slot(&slot_id).await;
             self.closed_count.fetch_add(1, Ordering::Relaxed);
             self.probe_wanted.store(true, Ordering::Relaxed);
         }
         for (job_id, slot_id) in resend {
-            let frame = native_protocol::KinStdin::Cancel {
+            let frame = native_protocol::StdinFrame::Cancel {
                 job_id,
                 slot_id: Some(slot_id),
             };
@@ -582,6 +587,7 @@ impl Runtime {
                 .await;
             return;
         }
+        self.retire_idle().await;
         self.probe_tick(now).await;
     }
 
@@ -639,7 +645,7 @@ impl Runtime {
             }
         };
         let _ = self
-            .write_cli_stdin(native_protocol::KinStdin::Ping { nonce })
+            .write_cli_stdin(native_protocol::StdinFrame::Ping { nonce })
             .await;
     }
 
@@ -718,7 +724,7 @@ impl Runtime {
     }
 
     /// Stand-in for the CLI child: an in-memory pipe carrying the very same
-    /// `kin_*` protocol, so tests exercise `write_cli_stdin` /
+    /// `*` protocol, so tests exercise `write_cli_stdin` /
     /// `decode_stdout` instead of a bespoke fake.
     async fn start_simulated(self: &Arc<Self>, generation: u64) -> Result<(), KernelError> {
         self.pid.store(std::process::id(), Ordering::Relaxed);
@@ -744,7 +750,7 @@ impl Runtime {
         ensure_socks_http_bridge()?;
         let reuse = self.cfg.session_dir.is_some();
         let dir = self.cfg.session_dir.clone().unwrap_or_else(|| {
-            PathBuf::from("/tmp/kin-cli/multiplex").join(Uuid::new_v4().to_string())
+            PathBuf::from("/tmp/cli/multiplex").join(Uuid::new_v4().to_string())
         });
         let spec = supervisor::SpawnSpec {
             bin: self.cfg.bin.clone(),
@@ -753,6 +759,7 @@ impl Runtime {
             slot_count: self.cfg.slot_count,
             session_dir: dir,
             desired_config_hash: self.cfg.desired_config_hash.clone(),
+            kernel_config_path: self.cfg.panel_config_path.clone(),
             reuse_credentials: reuse,
         };
         let mut supervised = supervisor::spawn(&spec).await?;
@@ -768,9 +775,9 @@ impl Runtime {
             .stdin
             .take()
             .ok_or_else(|| KernelError::Provider("claude stdin missing".into()))?;
-        // Do not write kin_hello: official `-p` peeks stdin and, after the
+        // Do not write hello: official `-p` peeks stdin and, after the
         // first byte, waits for EOF. A live job pipe never ends, so a boot
-        // hello hung the CLI before runHeadless / kin_slot_ready.
+        // hello hung the CLI before runHeadless / slot_ready.
         *self.cli_stdin.lock().await = Some(Box::new(stdin));
         let runtime = Arc::clone(self);
         tokio::spawn(async move {
@@ -780,7 +787,7 @@ impl Runtime {
             tokio::spawn(async move {
                 use tokio::io::{AsyncBufReadExt, BufReader};
                 let mut lines = BufReader::new(stderr).lines();
-                let path = "/tmp/kin-live/claude.multiplex.stderr.log";
+                let path = "/tmp/live/claude.multiplex.stderr.log";
                 let mut file = tokio::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
@@ -788,7 +795,7 @@ impl Runtime {
                     .await
                     .ok();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::info!(target: "kin_kernel::claude", "{line}");
+                    tracing::info!(target: "kernel::claude", "{line}");
                     if let Some(file) = file.as_mut() {
                         use tokio::io::AsyncWriteExt;
                         let _ = file.write_all(line.as_bytes()).await;
@@ -915,7 +922,6 @@ impl Runtime {
                 phase: slot.phase,
                 session_id: slot.session_id.clone(),
                 tenant_id: slot.tenant_id.clone(),
-                jobs_completed: slot.jobs_completed,
             })
             .collect()
     }
@@ -940,8 +946,8 @@ impl Runtime {
         self.running.load(Ordering::Relaxed)
     }
 
-    /// Terminal handler for a job: `kin_job_done` (`failure` = None) or
-    /// `kin_job_error`.
+    /// Terminal handler for a job: `job_done` (`failure` = None) or
+    /// `job_error`.
     async fn complete_job(
         &self,
         job_id: &str,
@@ -1017,60 +1023,66 @@ impl Runtime {
         if let Some(size) = self.job_sizes.lock().await.remove(job_id) {
             self.memory.end(size);
         }
-        let retire = if let Some(job) = job {
-            let mut slots = self.slots.lock().await;
-            if let Some(slot) = slots.iter_mut().find(|slot| slot.id == job.slot_id) {
-                slot.jobs_completed = slot.jobs_completed.saturating_add(1);
-                slot.should_retire(
-                    self.cfg.max_jobs_per_slot,
-                    self.cfg.slot_max_lifetime,
-                    self.cfg.session_idle_ttl,
-                )
-            } else {
-                false
-            }
-        } else {
-            false
-        };
         if let Some(slot_id) = slot_id {
             if self.host_unavailable() {
                 self.retire_slot(&slot_id).await;
-            } else if retire {
-                // The native host is stateless and announces slots only at
-                // boot. Marking one Dead would shrink capacity for good and
-                // push its pinned session onto another slot; recycle instead.
-                self.retire_slot(&slot_id).await;
-                self.register_native_ready(slot_id).await;
             } else {
-                // A job is always fully retired here regardless of stop_reason
-                // (including ToolUse): continuation never resumes this job_id, it
-                // always starts a fresh one via resume()'s submit() delegation
-                // (design.md §5.2), so the slot is free once its terminal frame
-                // has been delivered.
                 self.register_native_ready(slot_id).await;
             }
         }
     }
 
-    #[allow(dead_code)]
-    async fn retire_idle(&self) {
-        let ids: Vec<String> = {
-            let slots = self.slots.lock().await;
-            slots
-                .iter()
-                .filter(|slot| {
-                    slot.phase == SlotPhase::ReadyBlocked
-                        && slot.should_retire(
-                            self.cfg.max_jobs_per_slot,
-                            self.cfg.slot_max_lifetime,
-                            self.cfg.session_idle_ttl,
-                        )
-                })
-                .map(|slot| slot.id.clone())
-                .collect()
+    async fn session_idle_ttl(&self) -> Duration {
+        let Some(path) = &self.cfg.panel_config_path else {
+            return self.cfg.session_idle_ttl;
         };
-        for id in ids {
-            self.retire_slot(&id).await;
+        let mut cached = self.session_idle.lock().await;
+        let Ok(meta) = tokio::fs::metadata(path).await else {
+            return cached.ttl;
+        };
+        let Ok(modified) = meta.modified() else {
+            return cached.ttl;
+        };
+        let stamp = (modified, meta.len());
+        if cached.stamp == Some(stamp) {
+            return cached.ttl;
+        }
+        cached.stamp = Some(stamp);
+        let loaded = async {
+            let raw = tokio::fs::read(path).await.map_err(|err| err.to_string())?;
+            let config: PanelSessionIdle =
+                serde_json::from_slice(&raw).map_err(|err| err.to_string())?;
+            let seconds = config.session_idle_ttl_seconds.unwrap_or(600);
+            if !(1..=86400).contains(&seconds) {
+                return Err("session_idle_ttl_seconds must be 1..=86400".to_string());
+            }
+            Ok(Duration::from_secs(seconds))
+        }
+        .await;
+        match loaded {
+            Ok(ttl) => cached.ttl = ttl,
+            Err(error) => tracing::warn!(%error, "keeping previous sticky slot idle timeout"),
+        }
+        cached.ttl
+    }
+
+    async fn retire_idle(&self) {
+        if self.host_unavailable() {
+            return;
+        }
+        let ttl = self.session_idle_ttl().await;
+        let mut slots = self.slots.lock().await;
+        let mut sched = self.sched.lock().await;
+        for slot in slots.iter_mut() {
+            if !slot.session_idle(ttl) {
+                continue;
+            }
+            if let (Some(tenant), Some(session)) =
+                (slot.tenant_id.as_deref(), slot.session_id.as_deref())
+            {
+                sched.forget_session(tenant, session, &slot.id);
+                slot.release_session();
+            }
         }
     }
 
@@ -1092,13 +1104,13 @@ impl Runtime {
         self.handle_native_frame(native).await;
     }
 
-    async fn handle_native_frame(&self, frame: native_protocol::KinStdout) {
+    async fn handle_native_frame(&self, frame: native_protocol::StdoutFrame) {
         if self.host_unavailable() {
             tracing::debug!(?frame, "discarding frame after native host stopped");
             return;
         }
         match frame {
-            native_protocol::KinStdout::HostReady {
+            native_protocol::StdoutFrame::HostReady {
                 protocol_version,
                 slots,
                 system_layout,
@@ -1151,10 +1163,10 @@ impl Runtime {
                         .await;
                 }
             }
-            native_protocol::KinStdout::SlotReady { slot_id } => {
+            native_protocol::StdoutFrame::SlotReady { slot_id } => {
                 self.register_native_ready(slot_id).await;
             }
-            native_protocol::KinStdout::StreamEvent {
+            native_protocol::StdoutFrame::StreamEvent {
                 job_id,
                 slot_id,
                 event,
@@ -1185,7 +1197,7 @@ impl Runtime {
                     .apply_event(&event);
                 self.emit(&job_id, StreamItem::Event(event)).await;
             }
-            native_protocol::KinStdout::JobDone {
+            native_protocol::StdoutFrame::JobDone {
                 job_id,
                 slot_id,
                 stop_reason,
@@ -1204,7 +1216,7 @@ impl Runtime {
                 }
                 let _ = self.complete_job(&job_id, None, &stop_reason, usage).await;
             }
-            native_protocol::KinStdout::JobError {
+            native_protocol::StdoutFrame::JobError {
                 job_id,
                 slot_id: _,
                 error,
@@ -1228,7 +1240,7 @@ impl Runtime {
                     .complete_job(&job_id, Some(failure), "error", json!({}))
                     .await;
             }
-            native_protocol::KinStdout::CancelAck { job_id, slot_id } => {
+            native_protocol::StdoutFrame::CancelAck { job_id, slot_id } => {
                 // Only the ack for the cancel we are waiting on frees the slot;
                 // duplicates and acks for jobs we never cancelled are ignored.
                 let matched = {
@@ -1243,16 +1255,16 @@ impl Runtime {
                     }
                 };
                 let Some(cancel) = matched else {
-                    tracing::debug!(%job_id, %slot_id, "unmatched kin_cancel_ack");
+                    tracing::debug!(%job_id, %slot_id, "unmatched cancel_ack");
                     return;
                 };
                 if cancel.closed {
-                    tracing::info!(%slot_id, "late kin_cancel_ack; reopening slot");
+                    tracing::info!(%slot_id, "late cancel_ack; reopening slot");
                     self.closed_count.fetch_sub(1, Ordering::Relaxed);
                 }
                 self.register_native_ready(slot_id).await;
             }
-            native_protocol::KinStdout::Pong { nonce } => {
+            native_protocol::StdoutFrame::Pong { nonce } => {
                 let mut probe = self.probe.lock().await;
                 if probe.as_ref().is_some_and(|probe| probe.nonce == nonce) {
                     *probe = None;
@@ -1261,7 +1273,7 @@ impl Runtime {
         }
     }
 
-    /// P1-3: reject a `kin_host_ready` handshake that doesn't match what
+    /// P1-3: reject a `host_ready` handshake that doesn't match what
     /// Rust expects, instead of registering slots against a CLI running an
     /// incompatible protocol/env. `config_hash` has no "desired" side yet
     /// (Go `RuntimeProfile`, design.md §6, not implemented) so it is only
@@ -1276,10 +1288,10 @@ impl Runtime {
         capabilities: &[String],
         config_hash: Option<&str>,
     ) -> Result<(), String> {
-        if protocol_version != native_protocol::KIN_PROTOCOL_VERSION {
+        if protocol_version != native_protocol::PROTOCOL_VERSION {
             return Err(format!(
                 "protocol_version {protocol_version} != {}",
-                native_protocol::KIN_PROTOCOL_VERSION
+                native_protocol::PROTOCOL_VERSION
             ));
         }
         if slots != self.cfg.slot_count {
@@ -1301,7 +1313,7 @@ impl Runtime {
                 expected.timezone
             ));
         }
-        for required in native_protocol::KIN_CAPABILITIES {
+        for required in native_protocol::CAPABILITIES {
             if !capabilities.iter().any(|c| c == required) {
                 return Err(format!("missing required capability {required}"));
             }
@@ -1325,12 +1337,6 @@ impl Runtime {
             slots.push(Slot::new(slot_id.clone()));
         }
         if let Some(slot) = slots.iter_mut().find(|slot| slot.id == slot_id) {
-            if slot.phase == SlotPhase::Dead {
-                // Same stateless host process: restart the lifetime counters
-                // but keep tenant/session ownership (see Slot::unbind_ready).
-                slot.jobs_completed = 0;
-                slot.created_at = std::time::Instant::now();
-            }
             slot.unbind_ready();
         }
         drop(slots);
@@ -1341,7 +1347,7 @@ impl Runtime {
 
     /// Any failure here means the CLI cannot take input any more (closed
     /// pipe, or a pipe it stopped draining): restart it (L3).
-    async fn write_cli_stdin(&self, frame: native_protocol::KinStdin) -> Result<(), KernelError> {
+    async fn write_cli_stdin(&self, frame: native_protocol::StdinFrame) -> Result<(), KernelError> {
         self.host_available()?;
         let line = native_protocol::encode_stdin(&frame).map_err(KernelError::Provider)?;
         let limit = self.cfg.recovery.stdin_write_timeout;
@@ -1409,9 +1415,9 @@ impl Runtime {
 
     /// Tear down a job that will not complete normally.
     ///
-    /// `Job::cli_done` decides who frees the slot. After `kin_job_done` /
-    /// `kin_job_error` the CLI already released it, so it is re-registered
-    /// here. Otherwise the CLI is still running the job: send `kin_cancel`
+    /// `Job::cli_done` decides who frees the slot. After `job_done` /
+    /// `job_error` the CLI already released it, so it is re-registered
+    /// here. Otherwise the CLI is still running the job: send `cancel`
     /// and let its ack free the slot. Removing the job under the `jobs` lock
     /// makes this run once per job, whoever calls it first.
     async fn abort_terminal_job(&self, job_id: &str) {
@@ -1456,7 +1462,7 @@ impl Runtime {
                 closed: false,
             },
         );
-        let frame = native_protocol::KinStdin::Cancel {
+        let frame = native_protocol::StdinFrame::Cancel {
             job_id: job.job_id,
             slot_id: Some(job.slot_id),
         };
@@ -1637,7 +1643,7 @@ impl Runtime {
         let n = self.running.fetch_add(1, Ordering::Relaxed) + 1;
         self.peak_running.fetch_max(n, Ordering::Relaxed);
         if let Err(err) = self
-            .write_cli_stdin(native_protocol::KinStdin::JobStart {
+            .write_cli_stdin(native_protocol::StdinFrame::JobStart {
                 request_context,
                 job_id: job_id.clone(),
                 slot_id,
@@ -1684,7 +1690,7 @@ impl Runtime {
         // already happened one layer up (api.rs::ActiveTurn::begin ->
         // session.rs::SessionDirectory::resume) by the time `context.resumed`
         // is set here, so a "resume" is structurally a fresh job: new job_id,
-        // any idle slot (sticky preferred), fresh kin_job_start with the
+        // any idle slot (sticky preferred), fresh job_start with the
         // already-merged request (design.md §5.2).
         let context = ExecutionContext {
             resumed: false,
@@ -1706,7 +1712,7 @@ impl Runtime {
             .map(|slot| slot.id.clone())
     }
 
-    /// True if the native host's last `kin_host_ready` was rejected for a
+    /// True if the native host's last `host_ready` was rejected for a
     /// config_hash mismatch against `desired_config_hash` (design.md §6).
     pub fn config_hash_mismatch(&self) -> bool {
         self.config_hash_mismatch.load(Ordering::Relaxed)
@@ -1809,6 +1815,7 @@ async fn job_watchdog(runtime: Weak<Runtime>) {
             return;
         };
         runtime.watchdog_sweep().await;
+        runtime.retire_idle().await;
     }
 }
 
@@ -1892,7 +1899,7 @@ fn latest_text(request: &MessageRequest) -> String {
     String::new()
 }
 
-/// In-memory stand-in for the Claude CLI child. It speaks exactly the `kin_*`
+/// In-memory stand-in for the Claude CLI child. It speaks exactly the `*`
 /// protocol the real CLI speaks, so tests exercise `write_cli_stdin`,
 /// `decode_stdout` and `handle_native_frame` instead of a bespoke fake.
 ///
@@ -1900,15 +1907,15 @@ fn latest_text(request: &MessageRequest) -> String {
 /// on `tool_use`, `[web_search]` emits server tool blocks, anything else
 /// answers with a single text block.
 ///
-/// Cancel semantics mirror the real runner: every `kin_cancel` is acked,
-/// including one for a job the CLI already finished, and `kin_ping` is
+/// Cancel semantics mirror the real runner: every `cancel` is acked,
+/// including one for a job the CLI already finished, and `ping` is
 /// answered from the input loop.
 /// Simulated CLI: accept the job, emit nothing, but ack a cancel.
-const SIM_SILENT_MARKER: &str = "__kin_sim_silent__";
+const SIM_SILENT_MARKER: &str = "__sim_silent__";
 /// Simulated CLI: accept the job, emit nothing, never ack its cancel.
-const SIM_HANG_MARKER: &str = "__kin_sim_hang__";
+const SIM_HANG_MARKER: &str = "__sim_hang__";
 /// Simulated CLI: the input loop stops reading stdin for good (process alive).
-const SIM_DEAF_MARKER: &str = "__kin_sim_deaf__";
+const SIM_DEAF_MARKER: &str = "__sim_deaf__";
 
 async fn simulated_cli(
     reader: impl tokio::io::AsyncRead + Unpin,
@@ -1921,12 +1928,12 @@ async fn simulated_cli(
     let writer = Arc::new(Mutex::new(writer));
     let hung: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let layout = envelope::load();
-    let ready = native_protocol::KinStdout::HostReady {
-        protocol_version: native_protocol::KIN_PROTOCOL_VERSION,
+    let ready = native_protocol::StdoutFrame::HostReady {
+        protocol_version: native_protocol::PROTOCOL_VERSION,
         slots,
         system_layout: layout.mode.as_str().to_string(),
         timezone: layout.timezone.clone(),
-        capabilities: native_protocol::KIN_CAPABILITIES
+        capabilities: native_protocol::CAPABILITIES
             .iter()
             .chain([&native_protocol::CAP_PING])
             .map(|cap| (*cap).to_string())
@@ -1938,11 +1945,11 @@ async fn simulated_cli(
     }
     let mut lines = BufReader::new(reader).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        let Ok(frame) = serde_json::from_str::<native_protocol::KinStdin>(&line) else {
+        let Ok(frame) = serde_json::from_str::<native_protocol::StdinFrame>(&line) else {
             continue;
         };
         match frame {
-            native_protocol::KinStdin::JobStart {
+            native_protocol::StdinFrame::JobStart {
                 job_id,
                 slot_id,
                 request,
@@ -1961,7 +1968,7 @@ async fn simulated_cli(
                     continue;
                 }
                 if text.contains(SIM_SILENT_MARKER) {
-                    // Upstream hung but the job still honours kin_cancel.
+                    // Upstream hung but the job still honours cancel.
                     continue;
                 }
                 let writer = Arc::clone(&writer);
@@ -1969,19 +1976,20 @@ async fn simulated_cli(
                     simulated_job(writer, job_id, slot_id, request, latency).await;
                 });
             }
-            native_protocol::KinStdin::Cancel { job_id, slot_id } => {
+            native_protocol::StdinFrame::Cancel { job_id, slot_id } => {
                 if hung.lock().await.contains(&job_id) {
                     continue;
                 }
                 let slot_id = slot_id.unwrap_or_default();
                 let _ = write_sim_frame(
                     &writer,
-                    &native_protocol::KinStdout::CancelAck { job_id, slot_id },
+                    &native_protocol::StdoutFrame::CancelAck { job_id, slot_id },
                 )
                 .await;
             }
-            native_protocol::KinStdin::Ping { nonce } => {
-                let _ = write_sim_frame(&writer, &native_protocol::KinStdout::Pong { nonce }).await;
+            native_protocol::StdinFrame::Ping { nonce } => {
+                let _ =
+                    write_sim_frame(&writer, &native_protocol::StdoutFrame::Pong { nonce }).await;
             }
         }
     }
@@ -1989,7 +1997,7 @@ async fn simulated_cli(
 
 async fn write_sim_frame<W: tokio::io::AsyncWrite + Unpin>(
     writer: &Arc<Mutex<W>>,
-    frame: &native_protocol::KinStdout,
+    frame: &native_protocol::StdoutFrame,
 ) -> Result<(), std::io::Error> {
     use tokio::io::AsyncWriteExt;
     let mut line = serde_json::to_vec(frame).unwrap_or_default();
@@ -2016,7 +2024,7 @@ async fn simulated_job<W: tokio::io::AsyncWrite + Unpin>(
         async move {
             write_sim_frame(
                 &writer,
-                &native_protocol::KinStdout::StreamEvent {
+                &native_protocol::StdoutFrame::StreamEvent {
                     job_id,
                     slot_id,
                     event,
@@ -2129,7 +2137,7 @@ async fn simulated_job<W: tokio::io::AsyncWrite + Unpin>(
     let _ = event(&writer, json!({ "type": "message_stop" })).await;
     let _ = write_sim_frame(
         &writer,
-        &native_protocol::KinStdout::JobDone {
+        &native_protocol::StdoutFrame::JobDone {
             job_id,
             slot_id,
             stop_reason: stop_reason.to_string(),
@@ -2140,28 +2148,28 @@ async fn simulated_job<W: tokio::io::AsyncWrite + Unpin>(
 }
 
 fn ensure_socks_http_bridge() -> Result<(), KernelError> {
-    if env::var("KIN_HTTPS_PROXY")
+    if env::var("BRIDGE_HTTPS_PROXY")
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false)
     {
         return Ok(());
     }
-    let socks = env::var("KIN_SOCKS5").unwrap_or_default();
+    let socks = env::var("SOCKS5").unwrap_or_default();
     if socks.trim().is_empty() {
         return Ok(());
     }
-    let listen = env::var("KIN_HTTP_BRIDGE_ADDR").unwrap_or_else(|_| "127.0.0.1:18080".into());
+    let listen = env::var("HTTP_BRIDGE_ADDR").unwrap_or_else(|_| "127.0.0.1:18080".into());
     let proxy = format!("http://{listen}");
     // SAFETY: boot-time only, before CLI spawn.
     unsafe {
-        env::set_var("KIN_HTTPS_PROXY", &proxy);
-        env::set_var("KIN_HTTP_BRIDGE_ADDR", &listen);
+        env::set_var("BRIDGE_HTTPS_PROXY", &proxy);
+        env::set_var("HTTP_BRIDGE_ADDR", &listen);
     }
     let script = http_to_socks_script();
     let mut child = std::process::Command::new("python3")
         .arg(&script)
-        .env("KIN_SOCKS5", socks)
-        .env("KIN_HTTP_BRIDGE_ADDR", &listen)
+        .env("SOCKS5", socks)
+        .env("HTTP_BRIDGE_ADDR", &listen)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -2179,7 +2187,7 @@ fn ensure_socks_http_bridge() -> Result<(), KernelError> {
 }
 
 fn http_to_socks_script() -> PathBuf {
-    if let Ok(path) = env::var("KIN_HTTP_TO_SOCKS") {
+    if let Ok(path) = env::var("HTTP_TO_SOCKS") {
         return PathBuf::from(path);
     }
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()));
@@ -2217,7 +2225,7 @@ async fn decode_stdout(
     let mut dump = tokio::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/kin-live/claude.multiplex.stdout.log")
+        .open("/tmp/live/claude.multiplex.stdout.log")
         .await
         .ok();
     loop {
@@ -2291,9 +2299,8 @@ impl MultiplexCliProvider {
                 bin: PathBuf::from("simulated"),
                 mock_bin: true,
                 model: "claude-sonnet-5".into(),
-                max_jobs_per_slot: 32,
-                slot_max_lifetime: Duration::from_secs(1800),
                 session_idle_ttl: Duration::from_secs(600),
+                panel_config_path: None,
                 simulate_latency: Duration::from_millis(60),
                 continuation_ttl_secs: 600,
                 client_stall_timeout: Duration::from_secs(crate::config::DEFAULT_CLIENT_STALL_SECS),
@@ -2315,7 +2322,6 @@ impl MultiplexCliProvider {
             None => false,
         }
     }
-
     async fn runtime(&self) -> Result<&Arc<Runtime>, KernelError> {
         self.runtime
             .get_or_try_init(|| async {
@@ -2417,6 +2423,7 @@ impl Provider for MultiplexCliProvider {
 
 #[cfg(test)]
 mod tests {
+    use super::slot::SlotPhase;
     use super::*;
     use crate::model::{Message, ToolDefinition};
     use crate::provider::stream_channel;
@@ -2494,9 +2501,8 @@ mod tests {
             bin: PathBuf::from("simulated"),
             mock_bin: true,
             model: "claude-sonnet-5".into(),
-            max_jobs_per_slot: 32,
-            slot_max_lifetime: Duration::from_secs(1800),
             session_idle_ttl: Duration::from_secs(600),
+            panel_config_path: None,
             simulate_latency: Duration::from_millis(1),
             continuation_ttl_secs: 600,
             client_stall_timeout: stall,
@@ -2507,6 +2513,77 @@ mod tests {
             session_dir: None,
             recovery: RecoveryConfig::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn panel_idle_timeout_hot_reload_preserves_active_jobs_and_last_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kernel.json");
+        std::fs::write(&path, r#"{"session_idle_ttl_seconds":3600}"#).unwrap();
+        let mut cfg = test_cfg(Duration::from_secs(1));
+        cfg.panel_config_path = Some(path.clone());
+        let runtime = Runtime::new(cfg);
+        let idle_since = Instant::now() - Duration::from_secs(90);
+        for (id, phase) in [
+            ("idle", SlotPhase::ReadyBlocked),
+            ("active", SlotPhase::Running),
+        ] {
+            let mut slot = Slot::new(id);
+            slot.phase = phase;
+            slot.tenant_id = Some("demo".into());
+            slot.session_id = Some(id.into());
+            slot.last_change = idle_since;
+            runtime.slots.lock().await.push(slot);
+        }
+        runtime.retire_idle().await;
+        assert_eq!(runtime.slots.lock().await[0].last_change, idle_since);
+        assert_eq!(
+            runtime.slots.lock().await[0].session_id.as_deref(),
+            Some("idle")
+        );
+
+        std::fs::write(&path, r#"{"session_idle_ttl_seconds":60}"#).unwrap();
+        runtime.retire_idle().await;
+        let slots = runtime.slots.lock().await;
+        assert_eq!(slots[0].session_id, None);
+        assert_eq!(slots[1].session_id.as_deref(), Some("active"));
+        assert_eq!(slots[1].phase, SlotPhase::Running);
+        assert_eq!(slots[1].last_change, idle_since);
+        drop(slots);
+
+        std::fs::write(&path, r#"{"session_idle_ttl_seconds":0}"#).unwrap();
+        assert_eq!(runtime.session_idle_ttl().await, Duration::from_secs(60));
+    }
+
+    #[tokio::test]
+    async fn idle_session_releases_slot_for_reuse() {
+        let runtime = Runtime::new(test_cfg(Duration::from_secs(1)));
+        let slot_id = "s00".to_string();
+        let mut slot = Slot::new(slot_id.clone());
+        slot.phase = SlotPhase::ReadyBlocked;
+        slot.tenant_id = Some("demo".into());
+        slot.session_id = Some("idle-session".into());
+        slot.last_change = Instant::now() - Duration::from_secs(601);
+        runtime.slots.lock().await.push(slot);
+        {
+            let mut sched = runtime.sched.lock().await;
+            sched.enqueue_ready(slot_id.clone());
+            sched.bind_sticky("demo\u{1f}idle-session".into(), slot_id.clone());
+        }
+
+        runtime.retire_idle().await;
+
+        let mut slots = runtime.slots.lock().await;
+        let slot = slots.iter_mut().find(|slot| slot.id == slot_id).unwrap();
+        assert_eq!(slot.phase, SlotPhase::ReadyBlocked);
+        assert_eq!(slot.session_id, None);
+        assert_eq!(slot.tenant_id, None);
+        let mut sched = runtime.sched.lock().await;
+        assert_eq!(
+            sched.pick(&mut slots, "other", "new-session").unwrap(),
+            slot_id
+        );
+        assert!(slots[0].bind_job("other", "new-session", "job"));
     }
 
     fn delta(text: &str) -> StreamItem {
@@ -3030,7 +3107,7 @@ mod tests {
         assert!(block_types.contains(&"text".to_string()), "{block_types:?}");
         assert_eq!(deltas, vec!["search-complete".to_string()]);
         assert!(
-            !deltas.iter().any(|d| d.contains("DUPLICATE_FROM_KIN_DONE")),
+            !deltas.iter().any(|d| d.contains("DUPLICATE_FROM_DONE")),
             "{deltas:?}"
         );
     }
@@ -3067,14 +3144,14 @@ mod tests {
         cfg.desired_config_hash = Some("expected-hash".into());
         let runtime = Runtime::new(cfg);
         let expected_envelope = envelope::load();
-        let capabilities: Vec<String> = native_protocol::KIN_CAPABILITIES
+        let capabilities: Vec<String> = native_protocol::CAPABILITIES
             .iter()
             .map(|s| s.to_string())
             .collect();
 
         let err = runtime
             .validate_host_ready(
-                native_protocol::KIN_PROTOCOL_VERSION,
+                native_protocol::PROTOCOL_VERSION,
                 1,
                 expected_envelope.mode.as_str(),
                 &expected_envelope.timezone,
@@ -3089,7 +3166,7 @@ mod tests {
 
         runtime
             .validate_host_ready(
-                native_protocol::KIN_PROTOCOL_VERSION,
+                native_protocol::PROTOCOL_VERSION,
                 1,
                 expected_envelope.mode.as_str(),
                 &expected_envelope.timezone,
@@ -3100,8 +3177,8 @@ mod tests {
     }
 
     /// AC3: a native_messages job that ends on `tool_use` must assemble the
-    /// correct `ContentBlock::ToolUse` from `kin_stream_event` frames alone
-    /// (CLI sends empty `stop_reason`/`usage` in `kin_job_done`, per
+    /// correct `ContentBlock::ToolUse` from `stream_event` frames alone
+    /// (CLI sends empty `stop_reason`/`usage` in `job_done`, per
     /// APPLY.md's second protocol-defect fix), free its slot once the
     /// response is delivered, and accept a second job on that same slot
     /// carrying the matching `ContentBlock::ToolResult` through to
@@ -3130,7 +3207,7 @@ mod tests {
 
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_stream_event",
+                "type": "stream_event",
                 "job_id": job_id_1,
                 "slot_id": slot_id,
                 "event": {
@@ -3141,7 +3218,7 @@ mod tests {
             .await;
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_stream_event",
+                "type": "stream_event",
                 "job_id": job_id_1,
                 "slot_id": slot_id,
                 "event": {
@@ -3154,7 +3231,7 @@ mod tests {
         for chunk in ["{\"te", "xt\":\"", "hi\"}"] {
             runtime
                 .handle_cli_frame(json!({
-                    "type": "kin_stream_event",
+                    "type": "stream_event",
                     "job_id": job_id_1,
                     "slot_id": slot_id,
                     "event": {
@@ -3167,7 +3244,7 @@ mod tests {
         }
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_stream_event",
+                "type": "stream_event",
                 "job_id": job_id_1,
                 "slot_id": slot_id,
                 "event": { "type": "content_block_stop", "index": 0 }
@@ -3175,7 +3252,7 @@ mod tests {
             .await;
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_stream_event",
+                "type": "stream_event",
                 "job_id": job_id_1,
                 "slot_id": slot_id,
                 "event": {
@@ -3187,7 +3264,7 @@ mod tests {
             .await;
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_job_done",
+                "type": "job_done",
                 "job_id": job_id_1,
                 "slot_id": slot_id,
                 "stop_reason": "",
@@ -3269,7 +3346,7 @@ mod tests {
 
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_stream_event",
+                "type": "stream_event",
                 "job_id": job_id_2,
                 "slot_id": slot_id,
                 "event": {
@@ -3281,7 +3358,7 @@ mod tests {
             .await;
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_stream_event",
+                "type": "stream_event",
                 "job_id": job_id_2,
                 "slot_id": slot_id,
                 "event": {
@@ -3293,7 +3370,7 @@ mod tests {
             .await;
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_stream_event",
+                "type": "stream_event",
                 "job_id": job_id_2,
                 "slot_id": slot_id,
                 "event": {
@@ -3305,7 +3382,7 @@ mod tests {
             .await;
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_job_done",
+                "type": "job_done",
                 "job_id": job_id_2,
                 "slot_id": slot_id,
                 "stop_reason": "",
@@ -3332,7 +3409,7 @@ mod tests {
     }
 
     /// AC17 "job-slot 不匹配丢弃": `handle_cli_frame()` must silently discard
-    /// a `kin_stream_event`/`kin_job_done` frame whose `slot_id` does not
+    /// a `stream_event`/`job_done` frame whose `slot_id` does not
     /// match the job's actual assigned slot (`mod.rs`'s `job.slot_id !=
     /// slot_id` guards), rather than applying it to the wrong job's state.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3360,7 +3437,7 @@ mod tests {
         // StreamItem.
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_stream_event",
+                "type": "stream_event",
                 "job_id": job_id,
                 "slot_id": wrong_slot,
                 "event": {
@@ -3384,7 +3461,7 @@ mod tests {
         // A job_done tagged with the wrong slot_id must not complete the job.
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_job_done",
+                "type": "job_done",
                 "job_id": job_id,
                 "slot_id": wrong_slot,
                 "stop_reason": "end_turn",
@@ -3405,7 +3482,7 @@ mod tests {
         // Sanity: the same frames on the correct slot_id do apply.
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_stream_event",
+                "type": "stream_event",
                 "job_id": job_id,
                 "slot_id": real_slot,
                 "event": {
@@ -3421,7 +3498,7 @@ mod tests {
         );
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_job_done",
+                "type": "job_done",
                 "job_id": job_id,
                 "slot_id": real_slot,
                 "stop_reason": "end_turn",
@@ -3491,7 +3568,7 @@ mod tests {
         // Late frames from the dead process must not reanimate capacity.
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_cancel_ack",
+                "type": "cancel_ack",
                 "job_id": job_id,
                 "slot_id": slot_id
             }))
@@ -3500,8 +3577,8 @@ mod tests {
         assert_eq!(slot_phase(&runtime, &slot_id).await, Some(SlotPhase::Dead));
     }
 
-    /// A CLI-side terminal frame (`kin_job_error` here) already released the
-    /// slot inside the CLI, and the CLI drops a `kin_cancel` for a job it no
+    /// A CLI-side terminal frame (`job_error` here) already released the
+    /// slot inside the CLI, and the CLI drops a `cancel` for a job it no
     /// longer owns **without** acking it. Sending cancel on this path
     /// therefore leaked the slot forever (observed live: two failed jobs took
     /// a 2-slot runtime to `no_capacity`). The slot must come back
@@ -3536,7 +3613,7 @@ mod tests {
 
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_job_error",
+                "type": "job_error",
                 "job_id": job_id,
                 "slot_id": slot_id,
                 "error": "API Error: 400 invalid_request_error"
@@ -3676,14 +3753,14 @@ mod tests {
         );
 
         let layout = envelope::load();
-        let capabilities: Vec<String> = native_protocol::KIN_CAPABILITIES
+        let capabilities: Vec<String> = native_protocol::CAPABILITIES
             .iter()
             .map(|cap| (*cap).to_string())
             .collect();
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_host_ready",
-                "protocol_version": native_protocol::KIN_PROTOCOL_VERSION,
+                "type": "host_ready",
+                "protocol_version": native_protocol::PROTOCOL_VERSION,
                 "slots": 1,
                 "system_layout": layout.mode.as_str(),
                 "timezone": layout.timezone,
@@ -3692,7 +3769,7 @@ mod tests {
             .await;
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_job_done",
+                "type": "job_done",
                 "job_id": job_id,
                 "slot_id": slot_id,
                 "stop_reason": "end_turn",
@@ -3872,9 +3949,7 @@ mod tests {
         assert_eq!(runtime.unhealthy_reason(), None);
 
         runtime
-            .handle_cli_frame(
-                json!({"type": "kin_cancel_ack", "job_id": "other", "slot_id": slot_id}),
-            )
+            .handle_cli_frame(json!({"type": "cancel_ack", "job_id": "other", "slot_id": slot_id}))
             .await;
         assert_eq!(
             runtime.closed_slots(),
@@ -3886,9 +3961,7 @@ mod tests {
             .await
             .expect("pending cancel");
         runtime
-            .handle_cli_frame(
-                json!({"type": "kin_cancel_ack", "job_id": job_id, "slot_id": slot_id}),
-            )
+            .handle_cli_frame(json!({"type": "cancel_ack", "job_id": job_id, "slot_id": slot_id}))
             .await;
         assert_eq!(runtime.closed_slots(), 0);
         assert_eq!(runtime.ready_slots(), 4);
@@ -4108,19 +4181,19 @@ mod tests {
             .unwrap()
             .unwrap();
         let start: Value = serde_json::from_str(&start).expect("complete start JSONL");
-        assert_eq!(start["type"], "kin_job_start");
+        assert_eq!(start["type"], "job_start");
         let cancel = timeout(Duration::from_secs(2), lines.next_line())
             .await
             .unwrap()
             .unwrap()
             .unwrap();
         let cancel: Value = serde_json::from_str(&cancel).expect("complete cancel JSONL");
-        assert_eq!(cancel["type"], "kin_cancel");
+        assert_eq!(cancel["type"], "cancel");
         assert_eq!(cancel["job_id"], start["job_id"]);
         assert_eq!(runtime.ready_slots(), 0, "no reuse before acknowledgement");
         runtime
             .handle_cli_frame(json!({
-                "type": "kin_cancel_ack", "job_id": start["job_id"], "slot_id": "s00"
+                "type": "cancel_ack", "job_id": start["job_id"], "slot_id": "s00"
             }))
             .await;
         assert_eq!(runtime.ready_slots(), 1);
@@ -4159,7 +4232,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(100)).await;
             runtime
                 .handle_cli_frame(json!({
-                    "type": "kin_stream_event",
+                    "type": "stream_event",
                     "job_id": job_id,
                     "slot_id": slot_id,
                     "event": { "type": "ping" }

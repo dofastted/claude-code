@@ -1,8 +1,9 @@
-//! Claude Code auth for Kin-spawned CLI.
+//! Claude Code auth for kernel-spawned CLI.
 //!
 //! Two supported modes:
-//! - **subscriber oauth**: `.credentials.json` `claudeAiOauth` with refresh.
-//!   `CLAUDE_CODE_OAUTH_TOKEN` is stripped so the CLI uses the file and refreshes.
+//! - **subscriber oauth**: `.credentials.json` `claudeAiOauth`. `CLAUDE_CODE_OAUTH_TOKEN`
+//!   is stripped so the CLI reads the file; it never refreshes (the supervisor sets
+//!   `CLAUDE_CODE_HOST_REFRESH`), the host's Go Refresher rotates the RT.
 //! - **setup-token**: `claude setup-token` / inference-only oat. Injected as
 //!   `CLAUDE_CODE_OAUTH_TOKEN`. No refresh. Local MCP still works; Remote Control
 //!   and `user:sessions:claude_code` do not.
@@ -190,7 +191,7 @@ fn inference_blob(token: &str, expires_at: u64) -> Value {
 }
 
 pub fn resolve() -> Result<ResolvedCliAuth, KernelError> {
-    if let Ok(raw) = env::var("KIN_CLAUDE_CODE_OAUTH_TOKEN") {
+    if let Ok(raw) = env::var("CLAUDE_CODE_OAUTH_TOKEN") {
         let token = sanitize_setup_token(&raw);
         if !token.is_empty() {
             return Ok(ResolvedCliAuth {
@@ -200,7 +201,7 @@ pub fn resolve() -> Result<ResolvedCliAuth, KernelError> {
             });
         }
     }
-    let raw = env::var("KIN_CLAUDE_AI_OAUTH_JSON").ok();
+    let raw = env::var("CLAUDE_AI_OAUTH_JSON").ok();
     let blob = match raw {
         Some(text) if !text.trim().is_empty() => {
             let parsed: Value = serde_json::from_str(&text)
@@ -299,10 +300,10 @@ mod tests {
         with_env(
             &[
                 (
-                    "KIN_CLAUDE_CODE_OAUTH_TOKEN",
+                    "CLAUDE_CODE_OAUTH_TOKEN",
                     Some("sk-ant-oat01-x-AAStorethis.no"),
                 ),
-                ("KIN_CLAUDE_AI_OAUTH_JSON", None),
+                ("CLAUDE_AI_OAUTH_JSON", None),
             ],
             || {
                 let auth = resolve().unwrap();
@@ -323,8 +324,8 @@ mod tests {
         .to_string();
         with_env(
             &[
-                ("KIN_CLAUDE_CODE_OAUTH_TOKEN", None),
-                ("KIN_CLAUDE_AI_OAUTH_JSON", Some(&body)),
+                ("CLAUDE_CODE_OAUTH_TOKEN", None),
+                ("CLAUDE_AI_OAUTH_JSON", Some(&body)),
             ],
             || {
                 let auth = resolve().unwrap();
@@ -351,8 +352,8 @@ mod tests {
         .to_string();
         with_env(
             &[
-                ("KIN_CLAUDE_CODE_OAUTH_TOKEN", None),
-                ("KIN_CLAUDE_AI_OAUTH_JSON", Some(&body)),
+                ("CLAUDE_CODE_OAUTH_TOKEN", None),
+                ("CLAUDE_AI_OAUTH_JSON", Some(&body)),
             ],
             || {
                 let auth = resolve().unwrap();
@@ -380,8 +381,8 @@ mod tests {
         .to_string();
         with_env(
             &[
-                ("KIN_CLAUDE_CODE_OAUTH_TOKEN", None),
-                ("KIN_CLAUDE_AI_OAUTH_JSON", Some(&body)),
+                ("CLAUDE_CODE_OAUTH_TOKEN", None),
+                ("CLAUDE_AI_OAUTH_JSON", Some(&body)),
             ],
             || {
                 let auth = resolve().unwrap();
@@ -393,7 +394,7 @@ mod tests {
 
     #[test]
     fn writes_credentials_0600() {
-        let dir = std::env::temp_dir().join(format!("kin-cli-auth-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("cli-auth-{}", uuid::Uuid::new_v4()));
         let auth = ResolvedCliAuth {
             mode: CliAuthMode::SetupToken,
             blob: inference_blob("sk-ant-oat01-w-AA", 0),

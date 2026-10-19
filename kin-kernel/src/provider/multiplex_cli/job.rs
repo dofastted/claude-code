@@ -11,8 +11,8 @@ pub struct Job {
     pub request: MessageRequest,
     /// Node's id for this hop; `/internal/v1/cancel` looks jobs up by it.
     pub request_id: String,
-    /// The CLI already sent `kin_job_done` / `kin_job_error` and released its
-    /// slot, so a teardown must not send `kin_cancel` for it.
+    /// The CLI already sent `job_done` / `job_error` and released its
+    /// slot, so a teardown must not send `cancel` for it.
     pub cli_done: bool,
 }
 

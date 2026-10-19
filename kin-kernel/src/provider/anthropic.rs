@@ -25,7 +25,7 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
         let api_key = env::var("ANTHROPIC_API_KEY")
-            .map_err(|_| "ANTHROPIC_API_KEY is required for KIN_PROVIDER=anthropic_api")?;
+            .map_err(|_| "ANTHROPIC_API_KEY is required for PROVIDER=anthropic_api")?;
         let mut api_key_header = HeaderValue::from_str(&api_key)?;
         api_key_header.set_sensitive(true);
 
@@ -38,7 +38,7 @@ impl AnthropicProvider {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             USER_AGENT,
-            HeaderValue::from_static(concat!("kin-kernel/", env!("CARGO_PKG_VERSION"))),
+            HeaderValue::from_static(concat!("kernel/", env!("CARGO_PKG_VERSION"))),
         );
 
         let client = Client::builder()

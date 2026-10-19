@@ -80,8 +80,6 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         "limits": {
             "max_body_bytes": state.config.max_body_bytes,
             "max_tool_result_bytes": state.config.max_tool_result_bytes,
-            "slot_max_jobs": state.config.slot_max_jobs,
-            "slot_max_lifetime_secs": state.config.slot_max_lifetime.as_secs(),
             "client_channel": crate::config::CLIENT_CHANNEL_SIZE,
             "event_channel": crate::config::EVENT_CHANNEL_SIZE,
             "per_connection_buffer": crate::config::PER_CONNECTION_BUFFER
@@ -255,8 +253,8 @@ impl ActiveTurn {
     ) -> Result<Self, KernelError> {
         validate_request(&request)?;
         let tenant_id = header_or_default(headers, "x-tenant-id", &state.config.default_tenant)?;
-        let session_id = header_or_generated(headers, "x-kin-session-id")?;
-        let continuation = optional_header(headers, "x-kin-continuation")?;
+        let session_id = header_or_generated(headers, "x-session-id")?;
+        let continuation = optional_header(headers, "x-continuation")?;
         request.betas = parse_betas(headers);
         if let Some(version) = optional_header(headers, "anthropic-version")? {
             request
@@ -270,7 +268,7 @@ impl ActiveTurn {
             let tool_use_ids = tool_result_ids(&request);
             if tool_use_ids.is_empty() {
                 return Err(KernelError::InvalidRequest(
-                    "x-kin-continuation requires at least one tool_result block".to_string(),
+                    "x-continuation requires at least one tool_result block".to_string(),
                 ));
             }
             let binding = state
@@ -469,13 +467,13 @@ impl ActiveTurn {
         let mut response = Sse::new(ReceiverStream { inner: out_rx })
             .keep_alive(KeepAlive::default())
             .into_response();
-        insert_header(response.headers_mut(), "x-kin-session-id", &session_id);
+        insert_header(response.headers_mut(), "x-session-id", &session_id);
         if expose_slot {
-            insert_header(response.headers_mut(), "x-kin-slot", &worker_id);
+            insert_header(response.headers_mut(), "x-slot", &worker_id);
         }
         insert_header(
             response.headers_mut(),
-            "x-kin-generation",
+            "x-generation",
             &generation.to_string(),
         );
         response
@@ -599,20 +597,20 @@ fn json_response<T: Serialize>(state: &AppState, body: T, result: &ExecutionResu
 }
 
 fn insert_result_headers(headers: &mut HeaderMap, state: &AppState, result: &ExecutionResult) {
-    insert_header(headers, "x-kin-session-id", &result.session_id);
+    insert_header(headers, "x-session-id", &result.session_id);
     if let Some(token) = &result.continuation {
-        insert_header(headers, "x-kin-continuation", token);
+        insert_header(headers, "x-continuation", token);
     }
     if state.config.expose_slot_header {
-        insert_header(headers, "x-kin-slot", &result.worker_id);
+        insert_header(headers, "x-slot", &result.worker_id);
     }
     if let Some(pid) = result.pid {
-        insert_header(headers, "x-kin-pid", &pid.to_string());
+        insert_header(headers, "x-pid", &pid.to_string());
     }
     if let Some(slot_id) = &result.native_slot {
-        insert_header(headers, "x-kin-native-slot", slot_id);
+        insert_header(headers, "x-native-slot", slot_id);
     }
-    insert_header(headers, "x-kin-generation", &result.generation.to_string());
+    insert_header(headers, "x-generation", &result.generation.to_string());
 }
 
 fn to_chat_response(response: MessageResponse) -> ChatResponse {
@@ -837,8 +835,6 @@ mod tests {
             max_session_bytes: 1024 * 1024,
             session_ttl: Duration::from_secs(60),
             continuation_ttl: Duration::from_secs(60),
-            slot_max_jobs: 10,
-            slot_max_lifetime: Duration::from_secs(60),
             default_tenant: "demo".into(),
             expose_slot_header: true,
             provider: "mock".into(),

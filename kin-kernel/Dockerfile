@@ -5,6 +5,6 @@ COPY src ./src
 RUN cargo build --release
 
 FROM gcr.io/distroless/cc-debian12:nonroot
-COPY --from=build /src/target/release/kin-kernel /usr/local/bin/kin-kernel
+COPY --from=build /src/target/release/kernel /usr/local/bin/kernel
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/kin-kernel"]
+ENTRYPOINT ["/usr/local/bin/kernel"]

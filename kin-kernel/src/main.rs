@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("kin_kernel=info,tower_http=info")),
+                .unwrap_or_else(|_| EnvFilter::new("kernel=info,tower_http=info")),
         )
         .json()
         .init();
@@ -53,7 +53,7 @@ async fn run_public() -> Result<(), Box<dyn std::error::Error>> {
         "mock" => Arc::new(MockProvider),
         "anthropic_api" => Arc::new(AnthropicProvider::from_env()?),
         "local_cli" => Arc::new(provider::multiplex_cli::MultiplexCliProvider::from_env()?),
-        other => return Err(format!("unsupported KIN_PROVIDER: {other}").into()),
+        other => return Err(format!("unsupported PROVIDER: {other}").into()),
     };
     let cleanup_scheduler = Arc::clone(&scheduler);
     let cleanup_sessions = Arc::clone(&sessions);
@@ -77,7 +77,7 @@ async fn run_public() -> Result<(), Box<dyn std::error::Error>> {
         workers = config.worker_count,
         slots_per_worker = config.slots_per_worker,
         provider = %config.provider,
-        "kin-kernel listening"
+        "kernel listening"
     );
     tokio::spawn(async move {
         boot_state.mark_provider_booting();

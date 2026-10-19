@@ -46,6 +46,16 @@ impl SlotScheduler {
         self.ready.retain(|id| id != slot_id);
     }
 
+    pub fn forget_session(&mut self, tenant_id: &str, session_id: &str, slot_id: &str) {
+        let key = format!("{tenant_id}\u{1f}{session_id}");
+        if self
+            .sticky
+            .get(&key)
+            .is_some_and(|pin| pin.slot_id == slot_id)
+        {
+            self.sticky.remove(&key);
+        }
+    }
     pub fn bind_sticky(&mut self, session_key: String, slot_id: String) {
         self.sticky.insert(
             session_key,

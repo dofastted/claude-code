@@ -1,19 +1,19 @@
-//! stdin/stdout frames for the `kin_*` protocol (v2), used by both
+//! stdin/stdout frames for the `*` protocol (v2), used by both
 //! `execution_mode=native_slot` (`NativeAgent`) and `native_messages`
 //! (`NativeMessages`).
 //!
 //! Rust never constructs billing/identity. CLI emits Anthropic SSE inside
-//! `kin_stream_event.event` and tags job_id/slot_id explicitly. There is no
-//! `kin_hello` handshake and no in-CLI tool parking (`kin_tool_result`,
-//! `kin_job_parked`) — those were protocol v1 relics.
+//! `stream_event.event` and tags job_id/slot_id explicitly. There is no
+//! `hello` handshake and no in-CLI tool parking (`tool_result`,
+//! `job_parked`) — those were protocol v1 relics.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const KIN_PROTOCOL_VERSION: u32 = 2;
-pub const KIN_CAPABILITIES: &[&str] = &["multi_slot", "native_sse", "stateless"];
-/// Optional capability: the CLI answers `kin_ping` from its stdin loop and
-/// acks every `kin_cancel`. Only such a host is probed for liveness.
+pub const PROTOCOL_VERSION: u32 = 2;
+pub const CAPABILITIES: &[&str] = &["multi_slot", "native_sse", "stateless"];
+/// Optional capability: the CLI answers `ping` from its stdin loop and
+/// acks every `cancel`. Only such a host is probed for liveness.
 pub const CAP_PING: &str = "ping";
 pub const CAP_CLASSIFIER: &str = "classifier_request_context";
 
@@ -25,8 +25,8 @@ pub const MAX_JOB_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
-pub enum KinStdin {
-    #[serde(rename = "kin_job_start")]
+pub enum StdinFrame {
+    #[serde(rename = "job_start")]
     JobStart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request_context: Option<crate::provider::ClassifierRequestContext>,
@@ -34,20 +34,20 @@ pub enum KinStdin {
         slot_id: String,
         request: Value,
     },
-    #[serde(rename = "kin_cancel")]
+    #[serde(rename = "cancel")]
     Cancel {
         job_id: String,
         #[serde(default)]
         slot_id: Option<String>,
     },
-    #[serde(rename = "kin_ping")]
+    #[serde(rename = "ping")]
     Ping { nonce: String },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
-pub enum KinStdout {
-    #[serde(rename = "kin_host_ready")]
+pub enum StdoutFrame {
+    #[serde(rename = "host_ready")]
     HostReady {
         protocol_version: u32,
         slots: usize,
@@ -58,15 +58,15 @@ pub enum KinStdout {
         #[serde(default)]
         config_hash: Option<String>,
     },
-    #[serde(rename = "kin_slot_ready")]
+    #[serde(rename = "slot_ready")]
     SlotReady { slot_id: String },
-    #[serde(rename = "kin_stream_event")]
+    #[serde(rename = "stream_event")]
     StreamEvent {
         job_id: String,
         slot_id: String,
         event: Value,
     },
-    #[serde(rename = "kin_job_done")]
+    #[serde(rename = "job_done")]
     JobDone {
         job_id: String,
         slot_id: String,
@@ -74,7 +74,7 @@ pub enum KinStdout {
         #[serde(default)]
         usage: Value,
     },
-    #[serde(rename = "kin_job_error")]
+    #[serde(rename = "job_error")]
     JobError {
         job_id: String,
         #[serde(default)]
@@ -93,24 +93,24 @@ pub enum KinStdout {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request_id: Option<String>,
     },
-    #[serde(rename = "kin_cancel_ack")]
+    #[serde(rename = "cancel_ack")]
     CancelAck { job_id: String, slot_id: String },
-    #[serde(rename = "kin_pong")]
+    #[serde(rename = "pong")]
     Pong { nonce: String },
 }
 
-pub fn encode_stdin(frame: &KinStdin) -> Result<Vec<u8>, String> {
+pub fn encode_stdin(frame: &StdinFrame) -> Result<Vec<u8>, String> {
     let mut line = serde_json::to_vec(frame).map_err(|err| err.to_string())?;
     line.push(b'\n');
     Ok(line)
 }
 
 #[cfg(test)]
-pub fn decode_stdout_line(line: &str) -> Option<KinStdout> {
+pub fn decode_stdout_line(line: &str) -> Option<StdoutFrame> {
     serde_json::from_str(line).ok()
 }
 
-pub fn decode_stdout_value(frame: &Value) -> Option<KinStdout> {
+pub fn decode_stdout_value(frame: &Value) -> Option<StdoutFrame> {
     serde_json::from_value(frame.clone()).ok()
 }
 
@@ -125,23 +125,23 @@ mod tests {
 
     #[test]
     fn roundtrip_job_start() {
-        let frame = KinStdin::JobStart {
+        let frame = StdinFrame::JobStart {
             request_context: None,
             job_id: "job-1".into(),
             slot_id: "s00".into(),
             request: json!({"model":"claude-sonnet-5","messages":[]}),
         };
         let raw = String::from_utf8(encode_stdin(&frame).unwrap()).unwrap();
-        let parsed: KinStdin = serde_json::from_str(raw.trim()).unwrap();
+        let parsed: StdinFrame = serde_json::from_str(raw.trim()).unwrap();
         assert_eq!(parsed, frame);
     }
 
     #[test]
     fn stream_event_carries_ids() {
-        let line = r#"{"type":"kin_stream_event","job_id":"j1","slot_id":"s03","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}}"#;
+        let line = r#"{"type":"stream_event","job_id":"j1","slot_id":"s03","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}}"#;
         let parsed = decode_stdout_line(line).unwrap();
         match parsed {
-            KinStdout::StreamEvent {
+            StdoutFrame::StreamEvent {
                 job_id,
                 slot_id,
                 event,
@@ -156,10 +156,10 @@ mod tests {
 
     #[test]
     fn host_ready_handshake() {
-        let line = r#"{"type":"kin_host_ready","protocol_version":2,"slots":2,"system_layout":"zero","timezone":"America/New_York","capabilities":["multi_slot","native_sse","stateless"],"config_hash":"abc123"}"#;
+        let line = r#"{"type":"host_ready","protocol_version":2,"slots":2,"system_layout":"zero","timezone":"America/New_York","capabilities":["multi_slot","native_sse","stateless"],"config_hash":"abc123"}"#;
         let parsed = decode_stdout_line(line).unwrap();
         match parsed {
-            KinStdout::HostReady {
+            StdoutFrame::HostReady {
                 protocol_version,
                 slots,
                 capabilities,
@@ -177,10 +177,10 @@ mod tests {
 
     #[test]
     fn host_ready_without_config_hash() {
-        let line = r#"{"type":"kin_host_ready","protocol_version":2,"slots":1,"system_layout":"zero","timezone":"UTC","capabilities":["multi_slot"]}"#;
+        let line = r#"{"type":"host_ready","protocol_version":2,"slots":1,"system_layout":"zero","timezone":"UTC","capabilities":["multi_slot"]}"#;
         let parsed = decode_stdout_line(line).unwrap();
         match parsed {
-            KinStdout::HostReady { config_hash, .. } => assert!(config_hash.is_none()),
+            StdoutFrame::HostReady { config_hash, .. } => assert!(config_hash.is_none()),
             other => panic!("{other:?}"),
         }
     }

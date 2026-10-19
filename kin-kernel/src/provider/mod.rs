@@ -87,11 +87,11 @@ impl ClassifierRequestContext {
                             })
                         })
             }
+            // Text verdicts change tags across client versions (`<block>`,
+            // `<severity>`, …); only the transcript envelope and the absence of a
+            // forced tool define this format.
             ClassifierFormat::Xml => {
                 body.get("tool_choice").is_none()
-                    && body
-                        .get("system")
-                        .is_some_and(|s| s.to_string().contains("<block>"))
                     && body
                         .get("messages")
                         .is_some_and(|s| s.to_string().contains("<transcript>"))
@@ -182,8 +182,16 @@ mod tests {
             json!({"purpose":"auto_mode_classifier","format":"xml","stage":"xml_s1"}),
         )
         .unwrap();
-        assert!(context.validate(
-            &json!({"system":"<block>","messages":[{"role":"user","content":"<transcript>"}]})
+        for system in [
+            "Output <block>yes</block> or <block>no</block>",
+            "Output <severity>N</severity>",
+        ] {
+            assert!(context.validate(
+                &json!({"system":system,"messages":[{"role":"user","content":"<transcript>"}]})
+            ));
+        }
+        assert!(!context.validate(
+            &json!({"system":"<severity>","messages":[{"role":"user","content":"no envelope"}]})
         ));
         assert!(!context.validate(&json!({"system":"<block>","messages":[],"tool_choice":{"type":"tool","name":"classify_result"}})));
         for invalid in [

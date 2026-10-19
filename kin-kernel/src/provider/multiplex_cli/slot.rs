@@ -19,8 +19,6 @@ pub struct Slot {
     pub tenant_id: Option<String>,
     pub session_id: Option<String>,
     pub job_id: Option<String>,
-    pub jobs_completed: u32,
-    pub created_at: Instant,
     pub last_change: Instant,
 }
 
@@ -33,8 +31,6 @@ impl Slot {
             tenant_id: None,
             session_id: None,
             job_id: None,
-            jobs_completed: 0,
-            created_at: now,
             last_change: now,
         }
     }
@@ -64,20 +60,16 @@ impl Slot {
         self.last_change = Instant::now();
     }
 
-    pub fn should_retire(&self, max_jobs: u32, max_lifetime: Duration, idle: Duration) -> bool {
-        if self.jobs_completed >= max_jobs {
-            return true;
-        }
-        if self.created_at.elapsed() >= max_lifetime {
-            return true;
-        }
-        if self.phase == SlotPhase::ReadyBlocked
-            && self.tenant_id.is_some()
+    pub fn session_idle(&self, idle: Duration) -> bool {
+        self.phase == SlotPhase::ReadyBlocked
+            && self.session_id.is_some()
             && self.last_change.elapsed() >= idle
-        {
-            return true;
-        }
-        false
+    }
+
+    pub fn release_session(&mut self) {
+        self.tenant_id = None;
+        self.session_id = None;
+        self.last_change = Instant::now();
     }
 
     pub fn retire(&mut self) {
@@ -94,5 +86,4 @@ pub struct SlotSnapshot {
     pub phase: SlotPhase,
     pub session_id: Option<String>,
     pub tenant_id: Option<String>,
-    pub jobs_completed: u32,
 }

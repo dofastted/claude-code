@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -26,15 +26,11 @@ fn set_env(key: &str, value: &str) {
     unsafe { std::env::set_var(key, value) };
 }
 
-pub fn provider_from_config(config: &WorkerConfig) -> MultiplexCliProvider {
-    let submit_wait = std::env::var("KIN_SUBMIT_WAIT_MS")
+pub fn provider_from_config(config: &WorkerConfig, config_path: &Path) -> MultiplexCliProvider {
+    let submit_wait = std::env::var("SUBMIT_WAIT_MS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(2_000);
-    let lifetime = std::env::var("KIN_SLOT_MAX_LIFETIME_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1_800);
     if !config.https_proxy.trim().is_empty() {
         set_env("HTTPS_PROXY", config.https_proxy.trim());
         set_env("https_proxy", config.https_proxy.trim());
@@ -50,7 +46,7 @@ pub fn provider_from_config(config: &WorkerConfig) -> MultiplexCliProvider {
     set_env(
         "CLAUDE_CODE_VERSION",
         if cli_version.is_empty() {
-            "2.1.284"
+            "2.1.296"
         } else {
             cli_version
         },
@@ -65,9 +61,8 @@ pub fn provider_from_config(config: &WorkerConfig) -> MultiplexCliProvider {
         bin: PathBuf::from(&config.claude_bin),
         mock_bin: false,
         model: "claude-sonnet-5-5".into(),
-        max_jobs_per_slot: 50,
-        slot_max_lifetime: Duration::from_secs(lifetime),
-        session_idle_ttl: Duration::from_secs(600),
+        session_idle_ttl: Duration::from_secs(config.session_idle_ttl_seconds as u64),
+        panel_config_path: Some(config_path.to_path_buf()),
         simulate_latency: Duration::from_millis(40),
         continuation_ttl_secs: 600,
         client_stall_timeout: Duration::from_secs(crate::config::DEFAULT_CLIENT_STALL_SECS),
@@ -92,73 +87,13 @@ pub fn parse_request(
         obj.entry("max_tokens").or_insert(json!(128000));
         obj.insert("stream".into(), json!(true));
     }
-    // Node owns message breakpoints and inbound TTL. Kernel only forwards the
-    // body. A 5m (including a missing ttl) before a later 1h is illegal; only
-    // the later 1h is rewritten.
-    downgrade_later_hour_cache_ttl(&mut body);
+    // Claude Code owns cache marker placement and TTL normalization. Keep
+    // explicit caller markers byte-for-byte intact while forwarding the body.
+
     serde_json::from_value(body).map_err(|err| {
         WorkerError::new(StatusCode::BAD_REQUEST, "invalid_request", err.to_string())
     })
 }
-
-fn note_cache_control(node: &mut Value, seen_5m: &mut bool) {
-    let Some(obj) = node.as_object_mut() else {
-        return;
-    };
-    let Some(control) = obj.get_mut("cache_control") else {
-        return;
-    };
-    let Some(control_obj) = control.as_object_mut() else {
-        return;
-    };
-    let ttl = control_obj
-        .get("ttl")
-        .and_then(|value| value.as_str())
-        .unwrap_or("5m");
-    if ttl == "1h" {
-        if *seen_5m {
-            control_obj.insert("ttl".to_string(), Value::String("5m".to_string()));
-        }
-        return;
-    }
-    *seen_5m = true;
-}
-
-fn downgrade_later_hour_cache_ttl(body: &mut Value) {
-    let mut seen_5m = false;
-    if let Some(tools) = body.get_mut("tools").and_then(|value| value.as_array_mut()) {
-        for tool in tools.iter_mut() {
-            note_cache_control(tool, &mut seen_5m);
-        }
-    }
-    if let Some(system) = body.get_mut("system") {
-        match system {
-            Value::Array(blocks) => {
-                for block in blocks.iter_mut() {
-                    note_cache_control(block, &mut seen_5m);
-                }
-            }
-            Value::Object(_) => note_cache_control(system, &mut seen_5m),
-            _ => {}
-        }
-    }
-    if let Some(messages) = body
-        .get_mut("messages")
-        .and_then(|value| value.as_array_mut())
-    {
-        for message in messages.iter_mut() {
-            let Some(content) = message.get_mut("content") else {
-                continue;
-            };
-            if let Value::Array(blocks) = content {
-                for block in blocks.iter_mut() {
-                    note_cache_control(block, &mut seen_5m);
-                }
-            }
-        }
-    }
-}
-
 /// Slot sticky key and the session the CLI forwards upstream.
 ///
 /// Node writes the stable conversation id on `metadata.user_id` before the hop.
@@ -323,7 +258,7 @@ pub async fn dispatch(
             HeaderValue::from_static("application/json"),
         );
         headers.insert(
-            HeaderName::from_static("x-kin-terminal-state"),
+            HeaderName::from_static("x-terminal-state"),
             HeaderValue::from_static("verified"),
         );
         return Ok((StatusCode::OK, headers, body).into_response());
@@ -375,7 +310,7 @@ async fn verified_cli(
         HeaderValue::from_static("text/event-stream"),
     );
     headers.insert(
-        HeaderName::from_static("x-kin-terminal-state"),
+        HeaderName::from_static("x-terminal-state"),
         HeaderValue::from_static("verified"),
     );
     insert_event_count(&mut headers, result.event_count, &result.model);
@@ -397,7 +332,7 @@ fn realtime_cli(mut rx: StreamRx, shutdown: CancellationToken) -> Response {
                 // Downstream HTTP body dropped while the CLI is silent. Leaving
                 // this task drops `rx`, which is the provider client channel.
                 // job_egress treats that close as ClientGone and cancels the job
-                // through the existing kin_cancel / CancelAck path.
+                // through the existing cancel / CancelAck path.
                 _ = tx.closed() => break,
                 item = rx.recv() => {
                     let Some(item) = item else { break; };
@@ -428,12 +363,12 @@ fn realtime_cli(mut rx: StreamRx, shutdown: CancellationToken) -> Response {
         }
         let mut trailers = HeaderMap::new();
         let _ = trailers.insert(
-            HeaderName::from_static("x-kin-terminal-state"),
+            HeaderName::from_static("x-terminal-state"),
             HeaderValue::from_static(terminal_trailer_state(saw_stop)),
         );
         if let Some(code) = error_code {
             trailers.insert(
-                HeaderName::from_static("x-kin-error-code"),
+                HeaderName::from_static("x-error-code"),
                 HeaderValue::from_static(code),
             );
         }
@@ -447,7 +382,7 @@ fn realtime_cli(mut rx: StreamRx, shutdown: CancellationToken) -> Response {
     headers.insert(
         HeaderName::from_static("trailer"),
         HeaderValue::from_static(
-            "X-Kin-Terminal-State, X-Kin-Error-Code, X-Kin-Event-Count, X-Kin-Usage, X-Kin-Model, X-Kin-Stop-Reason",
+            "X-Terminal-State, X-Error-Code, X-Event-Count, X-Usage, X-Model, X-Stop-Reason",
         ),
     );
     let stream = futures_util::stream::unfold(rx_out, |mut rx| async move {
@@ -527,13 +462,13 @@ fn map_kernel(err: KernelError) -> WorkerError {
 
 fn insert_event_count(headers: &mut HeaderMap, count: i64, model: &str) {
     let _ = headers.insert(
-        HeaderName::from_static("x-kin-event-count"),
+        HeaderName::from_static("x-event-count"),
         HeaderValue::from_str(&count.to_string()).unwrap_or(HeaderValue::from_static("0")),
     );
     if !model.is_empty()
         && let Ok(value) = HeaderValue::from_str(model)
     {
-        headers.insert(HeaderName::from_static("x-kin-model"), value);
+        headers.insert(HeaderName::from_static("x-model"), value);
     }
 }
 
@@ -648,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn preserve_downgrades_a_later_hour_without_moving_the_breakpoint() {
+    fn official_request_preserves_explicit_breakpoint_order_and_ttl() {
         let request = parse_request(
             json!({
                 "model":"claude-sonnet-5",
@@ -664,8 +599,12 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(tail_ttl(&request), "5m");
+        assert_eq!(tail_ttl(&request), "1h");
         assert_eq!(request.tools.len(), 1);
+        assert_eq!(
+            request.tools[0].cache_control.as_ref().unwrap()["ttl"],
+            "5m"
+        );
     }
 
     #[test]

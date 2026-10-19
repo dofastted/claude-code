@@ -60,7 +60,7 @@ impl JobFailure {
         Self::new("kernel_unavailable", 503, "api_error", message)
     }
 
-    /// `kin_job_error`. Older CLIs send only `error`; that stays a CLI failure.
+    /// `job_error`. Older CLIs send only `error`; that stays a CLI failure.
     pub fn from_cli(
         code: Option<&str>,
         status: Option<u16>,
