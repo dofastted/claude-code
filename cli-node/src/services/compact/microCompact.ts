@@ -28,6 +28,7 @@ import {
   getTimeBasedMCConfig,
   type TimeBasedMCConfig,
 } from './timeBasedMCConfig.js'
+import { readPanelCachedMicrocompactEnabled } from '../../kin/cacheTtl.js'
 
 // Inline from utils/toolResultStorage.ts — importing that file pulls in
 // sessionStorage → utils/messages → services/api/errors, completing a
@@ -250,6 +251,19 @@ function isMainThreadSource(querySource: QuerySource | undefined): boolean {
   return !querySource || querySource.startsWith('repl_main_thread')
 }
 
+export const CACHED_MICROCOMPACT_UNAVAILABLE =
+  'cached_microcompact_unavailable: enabled in kernel.json, but this CLI build has no cache-editing implementation'
+
+export const cachedMicrocompactRuntime = {
+  async implementation(_model: string): Promise<{
+    isCachedMicrocompactEnabled?: () => boolean
+    isModelSupportedForCacheEditing?: (model: string) => boolean
+  } | null> {
+    if (!feature('CACHED_MICROCOMPACT')) return null
+    return getCachedMCModule()
+  },
+}
+
 export async function microcompactMessages(
   messages: Message[],
   toolUseContext?: ToolUseContext,
@@ -273,16 +287,17 @@ export async function microcompactMessages(
   // (session_memory, prompt_suggestion, etc.) from registering their
   // tool_results in the global cachedMCState, which would cause the main
   // thread to try deleting tools that don't exist in its own conversation.
-  if (feature('CACHED_MICROCOMPACT')) {
-    const mod = await getCachedMCModule()
+  if (readPanelCachedMicrocompactEnabled()) {
     const model = toolUseContext?.options.mainLoopModel ?? getMainLoopModel()
+    const mod = await cachedMicrocompactRuntime.implementation(model)
     if (
-      mod.isCachedMicrocompactEnabled() &&
-      mod.isModelSupportedForCacheEditing(model) &&
+      mod?.isCachedMicrocompactEnabled?.() &&
+      mod.isModelSupportedForCacheEditing?.(model) &&
       isMainThreadSource(querySource)
     ) {
       return await cachedMicrocompactPath(messages, querySource)
     }
+    throw new Error(CACHED_MICROCOMPACT_UNAVAILABLE)
   }
 
   // Legacy microcompact path removed — tengu_cache_plum_violet is always true.

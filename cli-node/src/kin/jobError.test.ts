@@ -58,6 +58,16 @@ test('empty stream, flattened assistant errors and internal failures', () => {
   )
   expect(classifyKinJobError(new TypeError('x is not a function'), { sawEvent: false }).code).toBe('cli_error')
 })
+test('enabled cached microcompact without an implementation is a request error', () => {
+  const error = new Error(
+    'cached_microcompact_unavailable: enabled in kernel.json, but this CLI build has no cache-editing implementation',
+  )
+  expect(classifyKinJobError(error, { sawEvent: false })).toMatchObject({
+    code: 'cached_microcompact_unavailable',
+    status: 400,
+    error_type: 'invalid_request_error',
+  })
+})
 
 test('receiving an event does not turn a local CLI exception into an upstream failure', () => {
   for (const sawEvent of [false, true]) {

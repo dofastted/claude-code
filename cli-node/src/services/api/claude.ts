@@ -38,6 +38,7 @@ import {
 import {
   applyKinOwnedCacheMarkers,
   explicitCacheTtl,
+  readPanelCachedMicrocompactEnabled,
   readPanelCacheTtl,
   resolveKinCacheTtl,
 } from '../../kin/cacheTtl.js'
@@ -261,7 +262,9 @@ import {
   logEvent,
 } from '../analytics/index.js'
 import {
+  CACHED_MICROCOMPACT_UNAVAILABLE,
   consumePendingCacheEdits,
+  cachedMicrocompactRuntime,
   getPinnedCacheEdits,
   markToolsSentToAPIState,
   pinCacheEdits,
@@ -1358,21 +1361,20 @@ async function* queryModel(
   // ant-only CACHE_EDITING_BETA_HEADER constant.
   let cachedMCEnabled = false
   let cacheEditingBetaHeader = ''
-  if (feature('CACHED_MICROCOMPACT')) {
-    const {
-      isCachedMicrocompactEnabled,
-      isModelSupportedForCacheEditing,
-      getCachedMCConfig,
-    } = await import('../compact/cachedMicrocompact.js')
-    const betas = await import('src/constants/betas.js')
-    cacheEditingBetaHeader = betas.CACHE_EDITING_BETA_HEADER
-    const featureEnabled = isCachedMicrocompactEnabled()
-    const modelSupported = isModelSupportedForCacheEditing(options.model)
-    cachedMCEnabled = featureEnabled && modelSupported
-    const config = getCachedMCConfig()
-    logForDebugging(
-      `Cached MC gate: enabled=${featureEnabled} modelSupported=${modelSupported} model=${options.model} supportedModels=${jsonStringify(config.supportedModels)}`,
-    )
+  if (readPanelCachedMicrocompactEnabled()) {
+    const mod = await cachedMicrocompactRuntime.implementation(options.model)
+    if (
+      mod?.isCachedMicrocompactEnabled?.() &&
+      mod.isModelSupportedForCacheEditing?.(options.model)
+    ) {
+      const betas = await import('src/constants/betas.js')
+      cacheEditingBetaHeader = betas.CACHE_EDITING_BETA_HEADER
+      cachedMCEnabled = true
+      logForDebugging(
+        `Cached MC gate: enabled=true modelSupported=true model=${options.model}`,
+      )
+    }
+    if (!cachedMCEnabled) throw new Error(CACHED_MICROCOMPACT_UNAVAILABLE)
   }
 
   const useGlobalCacheFeature = shouldUseGlobalCacheScope()
