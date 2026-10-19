@@ -8699,7 +8699,7 @@ var US_TIMEZONES = Object.freeze([
 ]);
 
 // src/lib/identity/vm-identity.mjs
-var OFFICIAL_CLI_VERSION = "2.1.284";
+var OFFICIAL_CLI_VERSION = "2.1.293";
 var OFFICIAL_CLAUDE_CLI_UA = `claude-cli/${OFFICIAL_CLI_VERSION} (external, sdk-cli)`;
 var OFFICIAL_STAINLESS = Object.freeze({
   stainless_lang: "js",
@@ -8707,7 +8707,7 @@ var OFFICIAL_STAINLESS = Object.freeze({
   stainless_arch: "x64",
   stainless_runtime: "node",
   stainless_runtime_version: "v26.3.0",
-  stainless_package_version: "0.112.1"
+  stainless_package_version: "0.128.0"
 });
 
 // src/lib/oauth/oauth-contract.mjs
@@ -8718,16 +8718,10 @@ var CAI_AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize";
 var PLATFORM = "https://platform.claude.com";
 var ANTHROPIC_API = "https://api.anthropic.com";
 var TOKEN_URL = `${PLATFORM}/v1/oauth/token`;
-var BOOTSTRAP_URL = `${ANTHROPIC_API}/api/claude_cli/bootstrap?entrypoint=claude-vscode&model=claude-opus-5`;
-var GROVE_SETTINGS_URL = `${PLATFORM}/api/oauth/account/settings`;
-var GROVE_SETTINGS_URLS = Object.freeze([
-  GROVE_SETTINGS_URL,
-  `${ANTHROPIC_API}/api/oauth/account/settings`,
-  `${ANTHROPIC_API}/api/oauth/settings`
-]);
+var BOOTSTRAP_URL = `${ANTHROPIC_API}/api/claude_cli/bootstrap?entrypoint=claude-code&model=claude-opus-5-5`;
 var FULL_OAUTH_SCOPE = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 var BROWSER_AUTHORIZE_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
-var TOKEN_UA = "claude-cli/2.1.284 (external, sdk-cli)";
+var TOKEN_UA = "claude-cli/2.1.293 (external, sdk-cli)";
 var BOOTSTRAP_UA = TOKEN_UA;
 var BETA_OAUTH2 = "oauth-2025-04-20";
 var OFFICIAL_CLI_HEADERS = Object.freeze({
@@ -8737,7 +8731,7 @@ var OFFICIAL_CLI_HEADERS = Object.freeze({
   "x-stainless-arch": "x64",
   "x-stainless-runtime": "node",
   "x-stainless-runtime-version": "v26.3.0",
-  "x-stainless-package-version": "0.112.1",
+  "x-stainless-package-version": "0.128.0",
   "x-stainless-retry-count": "0",
   "x-stainless-timeout": "600"
 });
@@ -8966,6 +8960,7 @@ async function authorizeWithSessionKey({
   const payload = {
     response_type: "code",
     client_id: CLIENT_ID,
+    organization_uuid: org,
     redirect_uri: REDIRECT_URI,
     scope: scope || FULL_OAUTH_SCOPE,
     state,
@@ -9060,35 +9055,9 @@ async function fetchBootstrapIdentity({
   }
   return { body, identity };
 }
-async function enableGroveAccountSetting({
-  accessToken,
-  fetchImpl = null,
-  proxyUrl = null,
-  timeoutMs = 15e3
-} = {}) {
-  const token = String(accessToken || "").trim();
-  if (!token) throw fail("access_token_required", "access token is required for Grove account setting");
-  const fetchFn = fetchFor(proxyUrl, fetchImpl, timeoutMs);
-  const request = {
-    method: "PATCH",
-    headers: bearerHeaders(token, { "content-type": "application/json" }),
-    body: JSON.stringify({ grove_enabled: true })
-  };
-  let lastError = null;
-  for (const url of GROVE_SETTINGS_URLS) {
-    try {
-      await fetchJson(fetchFn, url, request, "grove_settings");
-      return { ok: true };
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError || fail("grove_settings_failed", "Grove account setting failed");
-}
 async function completeAuthorizedToken({ token, proxyUrl = null, fetchImpl = null, timeoutMs = 15e3 } = {}) {
   if (!token?.access_token) throw fail("access_token_required", "token response missing access_token");
   const bootstrap = await fetchBootstrapIdentity({ accessToken: token.access_token, proxyUrl, fetchImpl, timeoutMs });
-  await enableGroveAccountSetting({ accessToken: token.access_token, proxyUrl, fetchImpl, timeoutMs });
   return applyOauthIdentity(
     {
       ...token,
