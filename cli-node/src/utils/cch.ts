@@ -1,12 +1,12 @@
 /**
- * Claude Code 2.1.281 cch.
+ * Claude Code 2.1.296 CCH.
  * Seed and the four lane constants are the movabs immediates in the linux-x64
- * ELF. The hash input is the final JSON with:
- *   1. the first cch= value reset to 00000
- *   2. every string-valued "model" cleared, quotes kept
- *   3. fallbacks array, fallback_credit_token string, and max_tokens digits
- *      removed, plus one adjacent comma
- * Same-length replacement of 00000 keeps Content-Length valid.
+ * The SDK may pretty-print JSON; the sealer compacts it before applying the
+ * official compact-JSON scanner, then sends that compact body. The hash input:
+ *   1. resets the first cch= value to 00000
+ *   2. clears every string-valued model
+ *   3. removes fallbacks, fallback_credit_token, and max_tokens digits
+ * The compact body is sent without the SDK's stale Content-Length header.
  */
 export const CCH_SEED = 0x4d659218e32a3268n
 
@@ -27,7 +27,7 @@ function round(acc: bigint, input: bigint): bigint {
 }
 
 function merge(acc: bigint, val: bigint): bigint {
-  return (((acc ^ round(0n, val)) * P1) + P4) & U
+  return ((acc ^ round(0n, val)) * P1 + P4) & U
 }
 
 function read64(data: Uint8Array, offset: number): bigint {
@@ -61,8 +61,7 @@ export function xxh64(data: Uint8Array, seed: bigint = CCH_SEED): bigint {
       v4 = round(v4, read64(data, i))
       i += 8
     }
-    h =
-      (rotl(v1, 1n) + rotl(v2, 7n) + rotl(v3, 12n) + rotl(v4, 18n)) & U
+    h = (rotl(v1, 1n) + rotl(v2, 7n) + rotl(v3, 12n) + rotl(v4, 18n)) & U
     h = merge(h, v1)
     h = merge(h, v2)
     h = merge(h, v3)
@@ -174,7 +173,18 @@ function skipMaxTokens(s: string): string {
 }
 
 export function projectForCch(body: string): string {
-  const reset = body.replace(/cch=[0-9a-f]{5}/, 'cch=00000')
+  let material = body
+  try {
+    const parsed = JSON.parse(body) as unknown
+    const compact = JSON.stringify(parsed)
+    if (typeof compact === 'string') material = compact
+  } catch {
+    // Keep non-JSON bodies unchanged; the SDK Messages request is JSON.
+  }
+  const reset = material.replace(
+    /(x-anthropic-billing-header:[^"]*?\bcch=)[0-9a-f]{5}(?=;)/i,
+    (_match, prefix: string) => `${prefix}00000`,
+  )
   return skipMaxTokens(skipCredit(skipFallbacks(blankStringModels(reset))))
 }
 
@@ -184,8 +194,17 @@ export function computeCch(body: string): string {
   return (digest & 0xfffffn).toString(16).padStart(5, '0')
 }
 
-/** Replace the first cch=00000 with the computed token. No-op if absent. */
-export function stampCchBody(body: string): string {
-  if (!body.includes('cch=00000')) return body
-  return body.replace('cch=00000', `cch=${computeCch(body)}`)
+/** Seal billing CCH. Enabled requests rewrite any five-hex digest, not only the placeholder. */
+export function stampCchBody(body: string, enabled = true): string {
+  const billingCch = /(x-anthropic-billing-header:[^"]*?\bcch=)[0-9a-f]{5}(?=;)/i
+  if (!enabled || !billingCch.test(body)) return body
+  let wireBody = body
+  try {
+    const compact = JSON.stringify(JSON.parse(body) as unknown)
+    if (typeof compact === 'string') wireBody = compact
+  } catch {
+    // Keep non-JSON bodies unchanged.
+  }
+  const placeholder = wireBody.replace(billingCch, (_match, prefix: string) => `${prefix}00000`)
+  return placeholder.replace(billingCch, (_match, prefix: string) => `${prefix}${computeCch(placeholder)}`)
 }
