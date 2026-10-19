@@ -77,6 +77,14 @@ pub fn provider_from_config(config: &WorkerConfig, config_path: &Path) -> Multip
     })
 }
 
+pub fn take_auto_compact_window(body: &mut Value) -> Option<u32> {
+    let value = body.as_object_mut()?.remove("auto_compact_window")?;
+    let tokens = value.as_u64()?;
+    (100_000..=1_000_000)
+        .contains(&tokens)
+        .then_some(tokens as u32)
+}
+
 pub fn parse_request(
     mut body: Value,
     _request_cache_ttl: Option<&str>,
@@ -121,6 +129,7 @@ pub fn context_from_headers(
         resumed: false,
         request_id: request_id.trim().to_string(),
         request_context: None,
+        auto_compact_window: None,
     }
 }
 

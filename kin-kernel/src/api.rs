@@ -303,6 +303,7 @@ impl ActiveTurn {
             resumed,
             request_id: String::new(),
             request_context: None,
+            auto_compact_window: None,
         };
         Ok(Self {
             lease,

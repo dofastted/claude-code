@@ -64,6 +64,8 @@ pub struct WorkerConfig {
     pub default_cache_ttl: String,
     #[serde(default = "default_session_idle_ttl_seconds")]
     pub session_idle_ttl_seconds: i64,
+    #[serde(default)]
+    pub auto_compact_window: Option<i64>,
 }
 
 fn default_session_idle_ttl_seconds() -> i64 {
@@ -174,6 +176,11 @@ impl WorkerConfig {
         }
         if !(1..=86400).contains(&self.session_idle_ttl_seconds) {
             return Err("session_idle_ttl_seconds must be 1..=86400".into());
+        }
+        if let Some(window) = self.auto_compact_window {
+            if !(100_000..=1_000_000).contains(&window) {
+                return Err("auto_compact_window must be 100000..=1000000".into());
+            }
         }
         match self.provider.trim() {
             "anthropic_api" => {}

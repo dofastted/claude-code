@@ -29,24 +29,53 @@ import { trySessionMemoryCompaction } from './sessionMemoryCompact.js'
 // Based on p99.99 of compact summary output being 17,387 tokens.
 const MAX_OUTPUT_TOKENS_FOR_SUMMARY = 20_000
 
-// Returns the context window size minus the max output tokens for the model
+// Returns the context window size minus the max output tokens for the model.
+// The model catalog owns the default. A caller or panel window replaces it;
+// native Math.min cannot raise a 200K result to the caller's 1M setting.
 export function getEffectiveContextWindowSize(model: string): number {
   const reservedTokensForSummary = Math.min(
     getMaxOutputTokensForModel(model),
     MAX_OUTPUT_TOKENS_FOR_SUMMARY,
   )
-  let contextWindow = getContextWindowForModel(model, getSdkBetas())
-
-  const autoCompactWindow = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
-  if (autoCompactWindow) {
-    const parsed = parseInt(autoCompactWindow, 10)
-    if (!isNaN(parsed) && parsed > 0) {
-      contextWindow = Math.min(contextWindow, parsed)
-    }
-  }
+  const contextWindow =
+    resolveAutoCompactWindowOverride() ??
+    getContextWindowForModel(model, getSdkBetas())
 
   return contextWindow - reservedTokensForSummary
 }
+const AUTO_COMPACT_WINDOW_MIN = 100_000
+const AUTO_COMPACT_WINDOW_MAX = 1_000_000
+
+function validAutoCompactWindow(value: unknown): number | null {
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim()
+        ? Number(value)
+        : Number.NaN
+  if (!Number.isInteger(parsed)) return null
+  if (parsed < AUTO_COMPACT_WINDOW_MIN || parsed > AUTO_COMPACT_WINDOW_MAX) return null
+  return parsed
+}
+
+function resolveAutoCompactWindowOverride(): number | null {
+  try {
+    const { getJobAutoCompactWindow } = require('../../bootstrap/jobSession.js') as typeof import('../../bootstrap/jobSession.js')
+    const jobWindow = getJobAutoCompactWindow()
+    if (jobWindow != null) return jobWindow
+  } catch {
+    // Standalone tests can resolve without the job scope.
+  }
+  const caller = validAutoCompactWindow(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)
+  if (caller != null) return caller
+  try {
+    const { readPanelAutoCompactWindow } = require('../../kin/cacheTtl.js') as typeof import('../../kin/cacheTtl.js')
+    return readPanelAutoCompactWindow()
+  } catch {
+    return null
+  }
+}
+
 
 export type AutoCompactTrackingState = {
   compacted: boolean

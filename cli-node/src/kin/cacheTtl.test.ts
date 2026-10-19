@@ -7,6 +7,7 @@ import {
   fillMissingCacheTtl,
   keepSingleMessageCacheMarker,
   kernelConfigPath,
+  readPanelAutoCompactWindow,
   readPanelCachedMicrocompactEnabled,
   readPanelCacheTtl,
   readPanelCchEnabled,
@@ -98,6 +99,23 @@ test('CCH policy hot reloads without enabling it during an unreadable update', (
     rmSync(dir, { recursive: true, force: true })
   }
 })
+test('panel compact window inherits the model unless a valid value is set', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'compact-window-'))
+  const path = join(dir, 'kernel.json')
+  try {
+    writeFileSync(path, '{}')
+    expect(readPanelAutoCompactWindow(path)).toBeNull()
+    writeFileSync(path, JSON.stringify({ auto_compact_window: 1_000_000 }))
+    expect(readPanelAutoCompactWindow(path)).toBe(1_000_000)
+    writeFileSync(path, JSON.stringify({ auto_compact_window: 50_000 }))
+    expect(readPanelAutoCompactWindow(path)).toBe(1_000_000)
+    writeFileSync(path, JSON.stringify({ auto_compact_window: null }))
+    expect(readPanelAutoCompactWindow(path)).toBeNull()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 
 test('native path keeps message markers and does not manufacture tool markers', () => {
   const system = [

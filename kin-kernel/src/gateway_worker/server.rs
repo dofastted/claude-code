@@ -235,8 +235,10 @@ async fn process_messages(state: WorkerState, body: Bytes) -> Result<Response, W
         })
         .transpose()?;
     if let Some(cli) = &state.cli {
+        let mut body = envelope.body;
+        let auto_compact_window = cli_hop::take_auto_compact_window(&mut body);
         let mut request = cli_hop::parse_request(
-            envelope.body,
+            body,
             envelope.cache_ttl.as_deref(),
             &state.config.default_cache_ttl,
             envelope.preserve_cache_breakpoints,
@@ -248,6 +250,7 @@ async fn process_messages(state: WorkerState, body: Bytes) -> Result<Response, W
             &envelope.request_id,
         );
         context.request_context = request_context;
+        context.auto_compact_window = auto_compact_window;
         cli_hop::align_request_session(&mut request, &context.session_id);
         let delivery = delivery_mode(&envelope.delivery_mode, &state.config.delivery_mode);
         return cli_hop::dispatch(

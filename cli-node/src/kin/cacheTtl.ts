@@ -104,6 +104,27 @@ export function readPanelCachedMicrocompactEnabled(
 }
   return lastPanelCachedMicrocompactEnabled;
   }
+let lastPanelAutoCompactWindow: number | null = null
+
+/** Null means inherit the model window. Invalid input keeps the last valid panel value. */
+export function readPanelAutoCompactWindow(path = kernelConfigPath()): number | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return lastPanelAutoCompactWindow
+    if (!('auto_compact_window' in parsed) || parsed.auto_compact_window == null) {
+      lastPanelAutoCompactWindow = null
+      return null
+    }
+    const value = Number(parsed.auto_compact_window)
+    if (Number.isInteger(value) && value >= 100_000 && value <= 1_000_000) {
+      lastPanelAutoCompactWindow = value
+    }
+  } catch {
+    // A transient missing file keeps the last valid panel window.
+  }
+  return lastPanelAutoCompactWindow
+}
+
 
 export function resolveKinCacheTtl(opts: {
   system?: unknown

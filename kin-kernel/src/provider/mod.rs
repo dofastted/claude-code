@@ -34,6 +34,7 @@ pub struct ExecutionContext {
     pub resumed: bool,
     /// Caller's hop id (Node `request_id`); empty when the caller sent none.
     pub request_id: String,
+    pub auto_compact_window: Option<u32>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]

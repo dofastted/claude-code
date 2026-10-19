@@ -1623,11 +1623,18 @@ impl Runtime {
         };
         let mut request_value = serde_json::to_value(&job.request).unwrap_or_else(|_| json!({}));
         let request_context = job.request_context.clone();
+        if let Some(window) = context.auto_compact_window {
+            if let Some(obj) = request_value.as_object_mut() {
+                obj.insert("auto_compact_window".to_string(), json!(window));
+            }
+        }
         // Patched cli-node skips addCacheBreakpoints when this is set, so it
         // does not insert a ttl-less tool marker (Anthropic reads that as 5m)
         // in front of the settings TTL.
         if let Some(obj) = request_value.as_object_mut() {
             obj.insert("wireMessages".to_string(), json!(true));
+            obj.remove("settings");
+            obj.remove("env");
         }
         self.jobs.lock().await.insert(job_id.clone(), job);
         self.job_seen

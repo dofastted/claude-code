@@ -13,7 +13,7 @@ import type {
 } from "@anthropic-ai/sdk/resources/beta/messages/messages.mjs";
 import type { ContentBlockParam } from "@anthropic-ai/sdk/resources/index.mjs";
 import { queryKinMessagesWithStreaming } from "../services/api/claude.js";
-import { runWithJobSession, getJobSessionId } from "../bootstrap/jobSession.js";
+import { runWithJobSession, getJobSessionId, getJobAutoCompactWindow, runWithJobAutoCompactWindow } from "../bootstrap/jobSession.js";
 import { asSessionId } from "../types/ids.js";
 import type { Message } from "../types/message.js";
 import {
@@ -222,6 +222,11 @@ export function sessionIdFromRequest(
 	return trimmed || undefined;
 }
 
+function autoCompactWindowFromRequest(request: Record<string, unknown>): number | undefined {
+	const value = Number(request.auto_compact_window)
+	return Number.isInteger(value) && value >= 100_000 && value <= 1_000_000 ? value : undefined
+}
+
 
 async function runJob(
 	slot: SlotState,
@@ -241,6 +246,14 @@ async function runJob(
 			runJob(slot, jobId, request, hostOptions, abort, requestContext),
 		);
 	}
+	const callerWindow = autoCompactWindowFromRequest(request);
+	if (callerWindow != null && getJobAutoCompactWindow() !== callerWindow) {
+		delete request.auto_compact_window
+		return runWithJobAutoCompactWindow(callerWindow, () =>
+			runJob(slot, jobId, request, hostOptions, abort, requestContext),
+		);
+	}
+	delete request.auto_compact_window
 	const model =
 		typeof request.model === "string" && request.model
 			? request.model
