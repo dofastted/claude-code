@@ -166,7 +166,12 @@ export function createBridgeApiClient(deps: BridgeApiDeps): BridgeApiClient {
               // worker_type lets claude.ai filter environments by origin
               // (e.g. assistant picker only shows assistant-mode workers).
               // Desktop cowork app sends "cowork"; we send a distinct value.
-              metadata: { worker_type: config.workerType },
+              // tool_host_cc_version is the attached client version. This build
+              // has no separate client hash field, so none is invented here.
+              metadata: {
+                worker_type: config.workerType,
+                tool_host_cc_version: deps.runnerVersion,
+              },
               // Idempotent re-registration: if we have a backend-issued
               // environment_id from a prior session (--session-id resume),
               // send it back so the backend reattaches instead of creating
@@ -190,7 +195,7 @@ export function createBridgeApiClient(deps: BridgeApiDeps): BridgeApiClient {
         `[bridge:api] POST /v1/environments/bridge -> ${response.status} environment_id=${response.data.environment_id}`,
       )
       debug(
-        `[bridge:api] >>> ${debugBody({ machine_name: config.machineName, directory: config.dir, branch: config.branch, git_repo_url: config.gitRepoUrl, max_sessions: config.maxSessions, metadata: { worker_type: config.workerType } })}`,
+        `[bridge:api] >>> ${debugBody({ machine_name: config.machineName, directory: config.dir, branch: config.branch, git_repo_url: config.gitRepoUrl, max_sessions: config.maxSessions, metadata: { worker_type: config.workerType, tool_host_cc_version: deps.runnerVersion } })}`,
       )
       debug(`[bridge:api] <<< ${debugBody(response.data)}`)
       return response.data
