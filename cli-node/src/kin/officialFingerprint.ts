@@ -1,5 +1,5 @@
 /**
- * Outbound HTTP fingerprint of official Claude CLI 2.1.293
+ * Outbound HTTP fingerprint of official Claude CLI 2.1.296
  * (linux-x64 sdk-cli capture). The fork's Bun/SDK versions must not leak
  * into Anthropic request headers.
  */
@@ -47,8 +47,7 @@ export const CLAUDE_CODE_REQUEST_CLASSES = [
   'side_reply',
 ] as const
 
-export type ClaudeCodeRequestClass =
-  (typeof CLAUDE_CODE_REQUEST_CLASSES)[number]
+export type ClaudeCodeRequestClass = (typeof CLAUDE_CODE_REQUEST_CLASSES)[number]
 
 export type ApiMetadataPrimitive = string | number | boolean
 
@@ -73,7 +72,7 @@ export function claudeCodeAppHeader(): 'cli' | 'cli-bg' {
 }
 
 /**
- * Official Ous + ss (2.1.293). `side_reply` is derived when the source
+ * Official Ous + ss (2.1.296). `side_reply` is derived when the source
  * argument is already that class (explicit override still wins).
  */
 export function deriveClaudeCodeRequestClass(
@@ -91,11 +90,7 @@ export function deriveClaudeCodeRequestClass(
   } else if (source.startsWith('agent:') || source === 'hook_agent') {
     mapped = 'subagent'
   }
-  if (
-    mapped === 'subagent' &&
-    context?.agentType === 'subagent' &&
-    context.workflowRunId
-  ) {
+  if (mapped === 'subagent' && context?.agentType === 'subagent' && context.workflowRunId) {
     return 'workflow'
   }
   return mapped
@@ -118,9 +113,7 @@ export function claudeCodeIdentityHeaders(args: {
   )
   return {
     'x-app': claudeCodeAppHeader(),
-    ...(requestClass
-      ? { 'x-claude-code-request-class': requestClass }
-      : {}),
+    ...(requestClass ? { 'x-claude-code-request-class': requestClass } : {}),
     ...args.customHeaders,
   }
 }
@@ -137,11 +130,7 @@ export function sanitizeClaudeCodeExtraMetadata(
     if (!Object.prototype.hasOwnProperty.call(fields, key)) continue
     const value = fields[key]
     if (API_METADATA_RESERVED_KEYS[key]) continue
-    if (
-      typeof value === 'string' ||
-      typeof value === 'number' ||
-      typeof value === 'boolean'
-    ) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
       out[key] = value
     }
   }
@@ -166,11 +155,7 @@ export function assembleApiMetadata(opts: {
   for (const key in opts.identity) {
     if (!Object.prototype.hasOwnProperty.call(opts.identity, key)) continue
     const value = opts.identity[key]
-    if (
-      typeof value === 'string' ||
-      typeof value === 'number' ||
-      typeof value === 'boolean'
-    ) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
       identity[key] = value
     }
   }

@@ -21,7 +21,7 @@ test('officialCliUserAgent is claude-cli not bun or axios', () => {
   process.env.CLAUDE_CODE_ENTRYPOINT = 'sdk-cli'
   try {
     const ua = officialCliUserAgent()
-    expect(ua).toBe('claude-cli/2.1.293 (external, sdk-cli)')
+    expect(ua).toBe('claude-cli/2.1.296 (external, sdk-cli)')
     expect(ua).not.toContain('Bun/')
     expect(ua).not.toContain('axios/')
   } finally {
@@ -44,24 +44,13 @@ test('applyOfficialOutboundHeaders overwrites bun stainless', () => {
     'x-stainless-runtime': 'bun',
   })
   try {
-    applyOfficialOutboundHeaders(
-      headers,
-      'claude-cli/2.1.280 (external, sdk-cli)',
-    )
-    expect(headers.get('User-Agent')).toBe(
-      'claude-cli/2.1.280 (external, sdk-cli)',
-    )
+    applyOfficialOutboundHeaders(headers, 'claude-cli/2.1.280 (external, sdk-cli)')
+    expect(headers.get('User-Agent')).toBe('claude-cli/2.1.280 (external, sdk-cli)')
     expect(headers.get('x-app')).toBe('cli')
     const stamped = officialStainlessHeaders()
-    expect(headers.get('x-stainless-runtime')).toBe(
-      stamped['x-stainless-runtime'],
-    )
-    expect(headers.get('x-stainless-runtime-version')).toBe(
-      stamped['x-stainless-runtime-version'],
-    )
-    expect(headers.get('x-stainless-package-version')).toBe(
-      stamped['x-stainless-package-version'],
-    )
+    expect(headers.get('x-stainless-runtime')).toBe(stamped['x-stainless-runtime'])
+    expect(headers.get('x-stainless-runtime-version')).toBe(stamped['x-stainless-runtime-version'])
+    expect(headers.get('x-stainless-package-version')).toBe(stamped['x-stainless-package-version'])
   } finally {
     if (prevKind == null) delete process.env.CLAUDE_CODE_SESSION_KIND
     else process.env.CLAUDE_CODE_SESSION_KIND = prevKind
@@ -80,14 +69,8 @@ test('officialH2Fetch skips when HTTPS_PROXY is set', () => {
 })
 
 test('resetOfficialH2Fetch drops cached agent', () => {
-  const keys = [
-    'HTTPS_PROXY',
-    'https_proxy',
-    'HTTP_PROXY',
-    'http_proxy',
-    'ANTHROPIC_UNIX_SOCKET',
-  ]
-  const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]))
+  const keys = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ANTHROPIC_UNIX_SOCKET']
+  const prev = Object.fromEntries(keys.map(k => [k, process.env[k]]))
   for (const k of keys) delete process.env[k]
   try {
     resetOfficialH2Fetch()
@@ -114,7 +97,7 @@ test('officialCliUserAgent ignores USER_TYPE', () => {
   process.env.USER_TYPE = 'ant'
   process.env.CLAUDE_CODE_ENTRYPOINT = 'sdk-cli'
   try {
-    expect(officialCliUserAgent()).toBe('claude-cli/2.1.293 (external, sdk-cli)')
+    expect(officialCliUserAgent()).toBe('claude-cli/2.1.296 (external, sdk-cli)')
   } finally {
     if (prevUser == null) delete process.env.USER_TYPE
     else process.env.USER_TYPE = prevUser
@@ -133,7 +116,7 @@ test('x-app is cli-bg for bg sessions and custom x-app wins', () => {
     process.env.CLAUDE_CODE_SESSION_KIND = 'bg'
     expect(claudeCodeAppHeader()).toBe('cli-bg')
     const headers = new Headers({ 'x-app': 'custom-app' })
-    applyOfficialOutboundHeaders(headers, 'claude-cli/2.1.293 (external, cli)')
+    applyOfficialOutboundHeaders(headers, 'claude-cli/2.1.296 (external, cli)')
     expect(headers.get('x-app')).toBe('custom-app')
     expect(
       claudeCodeIdentityHeaders({
@@ -162,9 +145,7 @@ test('request class follows source and keeps custom/explicit overrides', () => {
       workflowRunId: 'wf_1',
     }),
   ).toBe('workflow')
-  expect(deriveClaudeCodeRequestClass('compact', undefined, 'main')).toBe(
-    'main',
-  )
+  expect(deriveClaudeCodeRequestClass('compact', undefined, 'main')).toBe('main')
   expect(
     claudeCodeIdentityHeaders({
       source: 'agent:Explore',
@@ -175,7 +156,7 @@ test('request class follows source and keeps custom/explicit overrides', () => {
 
 test('applyOfficialOutboundHeaders leaves SDK helper version and retry fields', () => {
   const headers = new Headers({
-    'User-Agent': 'claude-cli/2.1.293 (external, cli)',
+    'User-Agent': 'claude-cli/2.1.296 (external, cli)',
     'x-app': 'cli',
     'x-stainless-helper': 'messages.create',
     'anthropic-version': '2023-06-01',
@@ -233,10 +214,7 @@ test('malformed reserved oversized extras cannot replace owned identity', () => 
     extra: { blob: 'x'.repeat(600) },
     identity,
   })
-  const oversizedParsed = JSON.parse(oversized.user_id) as Record<
-    string,
-    unknown
-  >
+  const oversizedParsed = JSON.parse(oversized.user_id) as Record<string, unknown>
   expect(oversizedParsed).toEqual(identity)
   expect(oversized.user_id).not.toContain('blob')
   expect(oversized.user_id.length).toBe(JSON.stringify(identity).length)

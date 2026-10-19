@@ -4,7 +4,7 @@ import { isBareMode, isEnvTruthy } from '../envUtils.js'
 import type { PermissionMode } from './PermissionMode.js'
 
 /**
- * Official 2.1.293 `--proactivity` levels (`Tee` / `ASt` / `Bie`).
+ * Official 2.1.296 `--proactivity` levels (`Tee` / `ASt` / `Bie`).
  * Not KAIROS Sleep / activateProactive.
  */
 export const PROACTIVITY_LEVELS = ['ask', 'default', 'proactive'] as const
@@ -12,10 +12,8 @@ export type ProactivityLevel = (typeof PROACTIVITY_LEVELS)[number]
 export const DEFAULT_PROACTIVITY_LEVEL: ProactivityLevel = 'default'
 
 export const RELAUNCH_PROACTIVITY_LEVEL_ENV = 'CLAUDE_CODE_RELAUNCH_PROACTIVITY_LEVEL'
-export const RELAUNCH_PROACTIVITY_EVER_ON_ENV =
-  'CLAUDE_CODE_RELAUNCH_PROACTIVITY_EVER_ON'
-export const RELAUNCH_PROACTIVITY_DECIDED_ENV =
-  'CLAUDE_CODE_RELAUNCH_PROACTIVITY_DECIDED'
+export const RELAUNCH_PROACTIVITY_EVER_ON_ENV = 'CLAUDE_CODE_RELAUNCH_PROACTIVITY_EVER_ON'
+export const RELAUNCH_PROACTIVITY_DECIDED_ENV = 'CLAUDE_CODE_RELAUNCH_PROACTIVITY_DECIDED'
 
 /** Official `ga` copy when `--proactivity ask` cannot run the selector. */
 export const PROACTIVITY_ASK_UNAVAILABLE_NOTIFICATION =
@@ -33,13 +31,8 @@ export type ResolvedProactivityLevel = {
   source: ProactivityLevelSource
 }
 
-export function isProactivityLevel(
-  value: unknown,
-): value is ProactivityLevel {
-  return (
-    typeof value === 'string' &&
-    (PROACTIVITY_LEVELS as readonly string[]).includes(value)
-  )
+export function isProactivityLevel(value: unknown): value is ProactivityLevel {
+  return typeof value === 'string' && (PROACTIVITY_LEVELS as readonly string[]).includes(value)
 }
 
 /**
@@ -47,10 +40,7 @@ export function isProactivityLevel(
  * `br()` is `--bare` / `CLAUDE_CODE_SIMPLE`.
  */
 export function isProactivityAttachmentsEnabled(): boolean {
-  return (
-    !isBareMode() &&
-    !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ATTACHMENTS)
-  )
+  return !isBareMode() && !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ATTACHMENTS)
 }
 
 /**
@@ -61,10 +51,7 @@ export function isProactivitySelectorGateEnabled(): boolean {
   if (isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_PROACTIVITY)) {
     return false
   }
-  return getFeatureValue_CACHED_MAY_BE_STALE(
-    'tengu_proactivity_selector',
-    true,
-  )
+  return getFeatureValue_CACHED_MAY_BE_STALE('tengu_proactivity_selector', true)
 }
 
 /**
@@ -73,9 +60,7 @@ export function isProactivitySelectorGateEnabled(): boolean {
  * equivalent; callers only consult this after a level is present.
  */
 export function isProactivitySelectorAvailable(): boolean {
-  return (
-    isProactivityAttachmentsEnabled() && isProactivitySelectorGateEnabled()
-  )
+  return isProactivityAttachmentsEnabled() && isProactivitySelectorGateEnabled()
 }
 
 /**
@@ -115,9 +100,7 @@ export function isRemoteThinClientSession({
 /**
  * Official `d1o`: consume relaunch level env if it is a real Tee value.
  */
-export function consumeRelaunchProactivityLevel():
-  | ProactivityLevel
-  | undefined {
+export function consumeRelaunchProactivityLevel(): ProactivityLevel | undefined {
   const raw = process.env[RELAUNCH_PROACTIVITY_LEVEL_ENV]
   delete process.env[RELAUNCH_PROACTIVITY_LEVEL_ENV]
   if (isProactivityLevel(raw)) return raw
@@ -126,7 +109,7 @@ export function consumeRelaunchProactivityLevel():
   return undefined
 }
 
-/** Official `fa` (persisted `Pln` is a no-op in 2.1.293). */
+/** Official `fa` (persisted `Pln` is a no-op in 2.1.296). */
 export function resolveStartupProactivityLevel(
   cliLevel: string | undefined,
 ): ResolvedProactivityLevel {
@@ -174,9 +157,9 @@ export function permissionModeSuppliedOnInvocation({
 }): boolean {
   return Boolean(
     permissionModeCli ||
-      inheritPermissionModeCli ||
-      dangerouslySkipPermissions ||
-      agentPermissionMode,
+    inheritPermissionModeCli ||
+    dangerouslySkipPermissions ||
+    agentPermissionMode,
   )
 }
 
@@ -186,8 +169,7 @@ export function permissionModeCapabilitiesFromContext(
   return {
     isAutoModeAvailable: context.isAutoModeAvailable === true,
     isBypassPermissionsModeAvailable:
-      context.isBypassPermissionsModeAvailable === true &&
-      context.restricted !== true,
+      context.isBypassPermissionsModeAvailable === true && context.restricted !== true,
   }
 }
 
@@ -208,8 +190,7 @@ export function mapProactivityLevelToPermissionMode(
       const sanitized = baseline
       if (
         sanitized === 'auto' ||
-        (sanitized === 'bypassPermissions' &&
-          !capabilities.isBypassPermissionsModeAvailable)
+        (sanitized === 'bypassPermissions' && !capabilities.isBypassPermissionsModeAvailable)
       ) {
         return 'default'
       }
@@ -270,26 +251,14 @@ export function selectProactivityPermissionMode({
   })
 
   let notification: string | undefined
-  if (
-    cliProactivityLevel === 'ask' &&
-    !modeSupplied &&
-    !selectorAvailable
-  ) {
+  if (cliProactivityLevel === 'ask' && !modeSupplied && !selectorAvailable) {
     notification = PROACTIVITY_ASK_UNAVAILABLE_NOTIFICATION
   }
 
   const baseline = context.mode
-  if (
-    kept &&
-    kept.level !== 'default' &&
-    !modeSupplied
-  ) {
+  if (kept && kept.level !== 'default' && !modeSupplied) {
     const capabilities = permissionModeCapabilitiesFromContext(context)
-    const mapped = mapProactivityLevelToPermissionMode(
-      kept.level,
-      capabilities,
-      baseline,
-    )
+    const mapped = mapProactivityLevelToPermissionMode(kept.level, capabilities, baseline)
     return {
       mode: mapped,
       notification,

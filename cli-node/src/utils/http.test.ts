@@ -34,7 +34,7 @@ test('getUserAgent hardcodes external even when USER_TYPE is unset or ant', () =
       CLAUDE_AGENT_SDK_CLIENT_APP: undefined,
     },
     () => {
-      expect(getUserAgent()).toBe('claude-cli/2.1.293 (external, cli)')
+      expect(getUserAgent()).toBe('claude-cli/2.1.296 (external, cli)')
     },
   )
   withUaEnv(
@@ -47,7 +47,7 @@ test('getUserAgent hardcodes external even when USER_TYPE is unset or ant', () =
     },
     () => {
       expect(getUserAgent()).toBe(
-        'claude-cli/2.1.293 (external, sdk-cli, agent-sdk/0.2.0, client-app/acme/1)',
+        'claude-cli/2.1.296 (external, sdk-cli, agent-sdk/0.2.0, client-app/acme/1)',
       )
     },
   )

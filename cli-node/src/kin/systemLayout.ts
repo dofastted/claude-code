@@ -9,31 +9,19 @@
  */
 import { randomUUID } from 'node:crypto'
 
-export const IDENTITY =
-  "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+export const IDENTITY = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
 
 export type SystemLayout = 'stock' | 'zero' | 'identity'
 
 export function getSystemLayout(): SystemLayout {
-  const raw = (
-    process.env.CLAUDE_CODE_SYSTEM_LAYOUT ||
-    process.env.KIN_SYSTEM_MODE ||
-    ''
-  )
-    .trim()
-    .toLowerCase()
+  const raw = (process.env.CLAUDE_CODE_SYSTEM_LAYOUT || process.env.SYSTEM_MODE || '').trim().toLowerCase()
   if (raw === 'zero') return 'zero'
   if (raw === 'identity' || raw === 'id' || raw === 'block') return 'identity'
   return 'stock'
 }
 
 export function getKinTimezone(): string {
-  const tz = (
-    process.env.CLAUDE_CODE_TIMEZONE ||
-    process.env.KIN_SLOT_TZ ||
-    process.env.TZ ||
-    'America/New_York'
-  ).trim()
+  const tz = (process.env.CLAUDE_CODE_TIMEZONE || process.env.SLOT_TZ || process.env.TZ || 'America/New_York').trim()
   return tz || 'America/New_York'
 }
 
@@ -49,8 +37,7 @@ function billingPromptId(): string {
   return stablePromptId
 }
 
-/** Match HTTP 0-inject: prompt_version=<identity>; keep cc_prompt_id.
- * cch stays 00000 here. The fetch sealer writes the real digest on the wire bytes. */
+/** Match HTTP 0-inject: prompt_version=<identity>; keep cc_prompt_id. */
 export function finalizeZeroBilling(attribution: string): string {
   let header = (attribution || '').trim()
   if (!header) header = 'x-anthropic-billing-header:'
@@ -63,22 +50,17 @@ export function finalizeZeroBilling(attribution: string): string {
     .replace(/\s*\bcch=[^;]*;?/gi, '')
     .replace(/\s+$/g, '')
   if (!header.endsWith(';')) header += ';'
-  if (!/\bcc_prompt_id=/.test(header))
-    header += ` cc_prompt_id=${billingPromptId()};`
+  if (!/\bcc_prompt_id=/.test(header)) header += ` cc_prompt_id=${billingPromptId()};`
   return `${header} cch=00000; prompt_version=<${IDENTITY}>`
 }
 
 function withCchPlaceholder(header: string): string {
-  const reset = header.replace(/\bcch=[0-9a-f]{5}/gi, 'cch=00000')
-  if (/\bcch=00000/i.test(reset)) return reset
+  const reset = header.replace(/\s*\bcch=[^;]*;?/gi, '')
   const base = reset.endsWith(';') ? reset : `${reset};`
   return `${base} cch=00000;`
 }
 
-export function layoutSystemBlocks(opts: {
-  attribution: string
-  leftover?: string
-}): string[] {
+export function layoutSystemBlocks(opts: { attribution: string; leftover?: string }): string[] {
   const layout = getSystemLayout()
   const attribution = (opts.attribution || '').trim()
   const leftover = opts.leftover
@@ -96,9 +78,7 @@ export function layoutSystemBlocks(opts: {
   return blocks
 }
 
-export function billingFromSystemPrompt(
-  systemPrompt: readonly string[],
-): string | undefined {
+export function billingFromSystemPrompt(systemPrompt: readonly string[]): string | undefined {
   for (const block of systemPrompt) {
     const text = (block || '').trim()
     if (text.startsWith('x-anthropic-billing-header')) return text
@@ -106,9 +86,7 @@ export function billingFromSystemPrompt(
   return undefined
 }
 
-export function leftoverFromSystemPrompt(
-  systemPrompt: readonly string[],
-): string | undefined {
+export function leftoverFromSystemPrompt(systemPrompt: readonly string[]): string | undefined {
   const parts: string[] = []
   for (const block of systemPrompt) {
     const text = (block || '').trim()
@@ -126,6 +104,38 @@ export function leftoverFromSystemPrompt(
  * subagent prompt and its notes, must stay. */
 function isDefaultAgentField(text: string): boolean {
   if (text.includes('persistent Crag') || text.includes('persistent Kin')) return true
-  if (text.includes('mcp__kin_runtime__')) return true
+  if (text.includes('mcp__runtime__')) return true
   return false
+}
+
+function blockText(block: unknown): string {
+  if (!block || typeof block !== 'object' || !('text' in block)) return ''
+  return typeof block.text === 'string' ? block.text : ''
+}
+
+/** A billed native wire system is already assembled, including official subagents. */
+export function isStandardPersonaSystem(system: unknown): boolean {
+  return Array.isArray(system) && system.some((block) => /^\s*x-anthropic-billing-header:/i.test(blockText(block)))
+}
+
+/** Keep Node's system blocks, including a zero-width identity slot. */
+export function wireSystemBlocks(
+  system: unknown,
+): Array<{ type: 'text'; text: string; cache_control?: Record<string, unknown> }> | null {
+  if (!isStandardPersonaSystem(system) || !Array.isArray(system)) return null
+  const blocks: Array<{ type: 'text'; text: string; cache_control?: Record<string, unknown> }> = []
+  for (const block of system) {
+    if (!block || typeof block !== 'object') return null
+    const text = blockText(block)
+    if (!text && !('text' in block)) return null
+    const next: { type: 'text'; text: string; cache_control?: Record<string, unknown> } = {
+      type: 'text',
+      text: /^\s*x-anthropic-billing-header:/i.test(text) ? withCchPlaceholder(text) : text,
+    }
+    if ('cache_control' in block && block.cache_control && typeof block.cache_control === 'object') {
+      next.cache_control = block.cache_control as Record<string, unknown>
+    }
+    blocks.push(next)
+  }
+  return blocks.length ? blocks : null
 }

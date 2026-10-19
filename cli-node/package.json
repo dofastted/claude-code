@@ -1,13 +1,13 @@
 {
   "name": "claude-code",
-  "version": "2.1.284",
+  "version": "2.1.296",
   "description": "Claude Code CLI \u2014 Leaked Source (2026-03-31)",
   "type": "module",
   "private": true,
   "scripts": {
     "start": "bun run src/entrypoints/cli.tsx",
     "dev": "bun --watch run src/entrypoints/cli.tsx",
-    "build": "bun build src/entrypoints/cli.tsx --outdir dist --target bun --define 'MACRO.VERSION=\"2.1.284\"' --define 'MACRO.BUILD_TIME=\"2026-09-28T02:26:10Z\"' --define 'MACRO.PACKAGE_URL=\"@anthropic-ai/claude-code\"' --define 'MACRO.NATIVE_PACKAGE_URL=\"\"' --define 'MACRO.FEEDBACK_CHANNEL=\"https://github.com/anthropics/claude-code/issues\"' --define 'MACRO.ISSUES_EXPLAINER=\"report the issue at https://github.com/anthropics/claude-code/issues\"' --define 'MACRO.VERSION_CHANGELOG=\"\"'",
+    "build": "bun build src/entrypoints/cli.tsx --outdir dist --target bun --define 'MACRO.VERSION=\"2.1.296\"' --define 'MACRO.BUILD_TIME=\"2026-09-28T02:26:10Z\"' --define 'MACRO.PACKAGE_URL=\"@anthropic-ai/claude-code\"' --define 'MACRO.NATIVE_PACKAGE_URL=\"\"' --define 'MACRO.FEEDBACK_CHANNEL=\"https://github.com/anthropics/claude-code/issues\"' --define 'MACRO.ISSUES_EXPLAINER=\"report the issue at https://github.com/anthropics/claude-code/issues\"' --define 'MACRO.VERSION_CHANGELOG=\"\"'",
     "typecheck": "bun x tsc --noEmit"
   },
   "dependencies": {

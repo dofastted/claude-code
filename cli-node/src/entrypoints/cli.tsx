@@ -41,10 +41,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  const { kernelEnv } = await import('../kin/kernelEnv.js');
+
   // cli-hop: do not enter interactive bootstrap. That path waits on
   // GrowthBook/MCP and never reaches print.ts. The kin host only needs
   // the query stack. Dynamic because --version must stay import-free.
-  if (process.env.CLAUDE_CODE_KIN_NATIVE_SLOTS) {
+  if (kernelEnv('NATIVE_SLOTS')) {
     const { enableConfigs } = await import('../utils/config.js');
     enableConfigs();
     const { runNativeMessagesLoop } = await import('../kin/nativeMessagesRunner.js');
@@ -304,6 +306,13 @@ async function main(): Promise<void> {
   // option building (not just inside the action handler).
   if (args.includes('--bare')) {
     process.env.CLAUDE_CODE_SIMPLE = '1';
+  }
+  if (args.includes('--safe-mode')) {
+    process.env.CLAUDE_CODE_SAFE_MODE = '1';
+    process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS = '1';
+  }
+  if (args.includes('--restricted')) {
+    process.env.CLAUDE_CODE_RESTRICTED = '1';
   }
 
   // No special flags detected, load and run the full CLI

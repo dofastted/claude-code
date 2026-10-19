@@ -68,6 +68,7 @@ import {
   clearKeychainCache,
   getMacOsKeychainStorageServiceName,
   getUsername,
+  usesMacOsKeychain,
 } from './secureStorage/macOsKeychainHelpers.js'
 import {
   getSettings_DEPRECATED,
@@ -1052,7 +1053,7 @@ export const getApiKeyFromConfigOrMacOSKeychain = memoize(
   (): { key: string; source: ApiKeySource } | null => {
     if (isBareMode()) return null
     // TODO: migrate to SecureStorage
-    if (process.platform === 'darwin') {
+    if (usesMacOsKeychain()) {
       // keychainPrefetch.ts fires this read at main.tsx top-level in parallel
       // with module imports. If it completed, use that instead of spawning a
       // sync `security` subprocess here (~33ms).
@@ -1101,7 +1102,7 @@ export async function saveApiKey(apiKey: string): Promise<void> {
   // Store as primary API key
   await maybeRemoveApiKeyFromMacOSKeychain()
   let savedToKeychain = false
-  if (process.platform === 'darwin') {
+  if (usesMacOsKeychain()) {
     try {
       // TODO: migrate to SecureStorage
       const storageServiceName = getMacOsKeychainStorageServiceName()
@@ -1467,6 +1468,21 @@ async function checkAndRefreshOAuthTokenIfNeededImpl(
 
   if (!shouldUseClaudeAIAuth(tokens.scopes)) {
     return false
+  }
+
+  // kin slots share one credentials.json with the host's Go Refresher, the sole
+  // RT writer. Refreshing here too spends the same rotating RT twice (the loser
+  // gets invalid_grant) and our save drops the host's _token_version, so the host
+  // can no longer tell someone else won. Only adopt what the host already wrote.
+  if (isEnvTruthy(process.env.CLAUDE_CODE_HOST_REFRESH)) {
+    getClaudeAIOAuthTokens.cache?.clear?.()
+    clearKeychainCache()
+    const disk = await getClaudeAIOAuthTokensAsync()
+    return (
+      !!disk?.accessToken &&
+      disk.accessToken !== tokens.accessToken &&
+      !isOAuthTokenExpired(disk.expiresAt)
+    )
   }
 
   // Re-read tokens async to check if they're still expired

@@ -12,6 +12,8 @@ test('context rejects unknown enums, fields and body mismatch', () => {
   const context = { purpose: 'auto_mode_classifier', format: 'xml', stage: 'xml_s1' }
   const request = { system: '<block>', messages: [{ role: 'user', content: '<transcript>' }] }
   expect(validClassifierContext(context, request)).toBe(true)
+  expect(validClassifierContext(context, { ...request, system: 'Output <severity>N</severity>' })).toBe(true)
+  expect(validClassifierContext(context, { ...request, messages: [{ role: 'user', content: 'no envelope' }] })).toBe(false)
   expect(validClassifierContext({ ...context, stage: 'unknown' }, request)).toBe(false)
   expect(validClassifierContext({ ...context, extra: true }, request)).toBe(false)
   expect(validClassifierContext({ ...context, format: 'tool' }, request)).toBe(false)

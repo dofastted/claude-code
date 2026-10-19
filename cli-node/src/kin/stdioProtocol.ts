@@ -1,27 +1,27 @@
-export const KIN_PROTOCOL_VERSION = 2
-export const KIN_CAPABILITIES = [
+export const PROTOCOL_VERSION = 2
+export const CAPABILITIES = [
   'multi_slot',
   'native_sse',
   'stateless',
-  // Answers kin_ping from the stdin loop and acks every kin_cancel.
+  // Answers ping from the stdin loop and acks every cancel.
   'ping',
   'classifier_request_context',
 ] as const
 
-export type KinStdin =
+export type StdinFrame =
   | {
-      type: 'kin_job_start'
+      type: 'job_start'
       job_id: string
       slot_id: string
       request: Record<string, unknown>
       request_context?: import('./classifierRequest.js').ClassifierRequestContext
     }
-  | { type: 'kin_cancel'; job_id: string; slot_id?: string }
-  | { type: 'kin_ping'; nonce: string }
+  | { type: 'cancel'; job_id: string; slot_id?: string }
+  | { type: 'ping'; nonce: string }
 
-export type KinStdout =
+export type StdoutFrame =
   | {
-      type: 'kin_host_ready'
+      type: 'host_ready'
       protocol_version: number
       slots: number
       system_layout: string
@@ -29,15 +29,15 @@ export type KinStdout =
       capabilities: string[]
       config_hash?: string
     }
-  | { type: 'kin_slot_ready'; slot_id: string }
+  | { type: 'slot_ready'; slot_id: string }
   | {
-      type: 'kin_stream_event'
+      type: 'stream_event'
       job_id: string
       slot_id: string
       event: unknown
     }
   | {
-      type: 'kin_job_done'
+      type: 'job_done'
       job_id: string
       slot_id: string
       stop_reason: string
@@ -45,7 +45,7 @@ export type KinStdout =
       headers?: Record<string, string>
     }
   | {
-      type: 'kin_job_error'
+      type: 'job_error'
       job_id: string
       slot_id?: string
       error: string
@@ -56,16 +56,16 @@ export type KinStdout =
       upstream_code?: string
       request_id?: string
     }
-  | { type: 'kin_cancel_ack'; job_id: string; slot_id: string }
-  | { type: 'kin_pong'; nonce: string }
+  | { type: 'cancel_ack'; job_id: string; slot_id: string }
+  | { type: 'pong'; nonce: string }
 
-export function parseStdinLine(line: string): KinStdin | null {
+export function parseStdinLine(line: string): StdinFrame | null {
   const trimmed = line.trim()
   if (!trimmed) return null
   try {
-    const parsed = JSON.parse(trimmed) as KinStdin
+    const parsed = JSON.parse(trimmed) as StdinFrame
     if (!parsed || typeof parsed.type !== 'string') return null
-    if (!parsed.type.startsWith('kin_')) return null
+    if (parsed.type !== 'job_start' && parsed.type !== 'cancel' && parsed.type !== 'ping') return null
     return parsed
   } catch {
     return null
@@ -74,7 +74,7 @@ export function parseStdinLine(line: string): KinStdin | null {
 
 let writeChain: Promise<void> = Promise.resolve()
 
-export function writeStdout(frame: KinStdout): Promise<void> {
+export function writeStdout(frame: StdoutFrame): Promise<void> {
   const line = JSON.stringify(frame) + '\n'
   const next = writeChain.then(
     () => writeLine(line),

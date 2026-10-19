@@ -1,8 +1,34 @@
+# cli-node 2.1.296
+
+本目录是 vm2api 使用的 Claude Code 源码树和构建入口。后续 cli-node 改动只在这里进行；`dist/`、`node_modules/`、`target/` 为本地构建产物，不作为源码基线提交。
+
+## 版本基线
+
+- 源码版本：Claude Code `2.1.296`。
+- Native Kin preserves caller wire system/messages/tools and their cache markers; only CLI-owned markers may be normalized or capped. `wireMessages` skips CLI message-breakpoint insertion, and the kernel forwards explicit caller TTLs unchanged.
+- Default TTL applies only to Kin-owned markers; caller-owned TTL-less markers keep the official implicit 5m semantics.
+
+- Kin caller tools are now preserved with caller system/messages; TTL-less caller markers are no longer rewritten to panel `1h` or trimmed to the CLI's four-marker budget.
+- CCH is sealed on the SDK's final JSON body only when the panel switch is enabled. Disabled requests keep exactly `cch=00000;` (five zeroes); billing always carries the parameter. Enabled JSON is compacted before scanning, without stale `Content-Length`, and only billing's CCH is projected/replaced.
+
+## 2026-10-18 — 关闭 CCH 固定五零（未发布）
+
+- 最新要求取代下方旧的“关闭时剥除”行为：关闭固定 `cch=00000;`，不计算摘要；开启仍在最终 SDK fetch 计算真实五位摘要。fetch 显式读取开关，不能以是否出现五零来推断开启。
+- 移除正文构造阶段旧 CCH 门控，统一补齐五零；保留版本、entrypoint、prompt ID / index 与 caller system。密封只处理 billing 参数，提示词中的 `cch=00000;` 不变。
+- 实际 kernel / CLI ELF 捕获 false → true → false 为 `00000` / `52572` / `00000`，同一 CLI PID、0 重启；五文件 38 passed，0 missing modules。候选 `/tmp/vm2api-cch-off-zero-cli` SHA256 `574d822cd2d18cfa5a73310bfac37460688becf2ae94eccc7a9b0dedf64ab400`，未替换交付副本或部署。
+
+## 2026-10-18 — 统一 CCH 与动态面板策略（未发布）
+
+- `kernel.json.cch_enabled` 默认开启，每个请求热读；开启时 billed wire system 缺少 CCH 也补占位，关闭时剥除旧值。试用 / 非订阅凭据不再阻止固定 billing 字段生成，最终紧凑 SDK JSON 密封逻辑保持。
+- 自产 billing 使用稳定会话 prompt ID 与固定 `0/1` 索引，不再按消息轮次移动；保留已有 billing 的版本与其他参数。标准出站版本仍为 `2.1.296`，Go 的 `2.1.293` 不在此处变更。
+- billed 官方 / 子代理 wire system 不要求 SDK identity 才保留；非 billing 正文与 caller cache marker 不改写。
+- 定向五文件 39 passed；已编译 `/tmp/vm2api-dynamic-config-cli`，0 missing modules。实际 Node → kernel → CLI → 回环上游捕获验证 CCH 开关、缺失补写、非订阅 billing、内置模板无 scope 与固定 UA；未用真实 Anthropic 账号，未替换交付副本、未发布或部署。
+
 # cli-node 2.1.293
 
 本目录是 vm2api 使用的 Claude Code 源码树和构建入口。后续 cli-node 改动只在这里进行；`dist/`、`node_modules/`、`target/` 为本地构建产物，不作为源码基线提交。
 
-## 版本与协议基线
+## 版本基线
 
 - 源码版本：Claude Code `2.1.293`。最小可出站版本是 `2.1.293`。
 - 一等 Haiku 是 `claude-haiku-5-5`。原生 1M，不走 `context-1m` beta，没有 gateway id。`max_tokens` 默认和上限都是 128000，默认 effort `medium`，知识截止 June 2026。三方回退 `claude-haiku-4-5`。

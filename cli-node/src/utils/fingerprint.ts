@@ -9,12 +9,10 @@ export const FINGERPRINT_SALT = '59cf53e54c78'
 
 /**
  * Extracts text content from the first non-meta user message.
- * Official goe (2.1.293) skips `isMeta` so synthetic ticks/caveats
+ * Official goe (2.1.296) skips `isMeta` so synthetic ticks/caveats
  * cannot own the attribution fingerprint. Hash formula is unchanged.
  */
-export function extractFirstMessageText(
-  messages: (UserMessage | AssistantMessage)[],
-): string {
+export function extractFirstMessageText(messages: (UserMessage | AssistantMessage)[]): string {
   const firstUserMessage = messages.find(msg => {
     const row = msg as { type?: string; isMeta?: boolean }
     return row.type === 'user' && !row.isMeta
@@ -30,9 +28,8 @@ export function extractFirstMessageText(
   }
 
   if (Array.isArray(content)) {
-    const textBlock = content.find(
-      (block: { type?: string }) => block.type === 'text',
-    ) as { type: 'text'; text: string } | undefined
+    const textBlock = content.find((block: { type?: string }) => block.type === 'text') as
+      { type: 'text'; text: string } | undefined
     if (textBlock && textBlock.type === 'text') {
       return textBlock.text
     }
@@ -51,10 +48,7 @@ export function extractFirstMessageText(
  * @param version - Version string (from MACRO.VERSION)
  * @returns 3-character hex fingerprint
  */
-export function computeFingerprint(
-  messageText: string,
-  version: string,
-): string {
+export function computeFingerprint(messageText: string, version: string): string {
   // Extract chars at indices [4, 7, 20], use "0" if index not found
   const indices = [4, 7, 20]
   const chars = indices.map(i => messageText[i] || '0').join('')

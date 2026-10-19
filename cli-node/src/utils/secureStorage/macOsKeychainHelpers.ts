@@ -17,7 +17,7 @@
 import { createHash } from 'crypto'
 import { userInfo } from 'os'
 import { getOauthConfig } from 'src/constants/oauth.js'
-import { getClaudeConfigHomeDir } from '../envUtils.js'
+import { getClaudeConfigHomeDir, isEnvTruthy } from '../envUtils.js'
 import type { SecureStorageData } from './types.js'
 
 // Suffix distinguishing the OAuth credentials keychain entry from the legacy
@@ -46,6 +46,18 @@ export function getUsername(): string {
   } catch {
     return 'claude-code-user'
   }
+}
+
+/**
+ * kin's host owns `.credentials.json` and rotates it on disk. A keychain entry
+ * would shadow those rotations, and the first successful keychain write deletes
+ * the file (fallbackStorage), so launched CLIs never touch the keychain.
+ */
+export function usesMacOsKeychain(): boolean {
+  return (
+    process.platform === 'darwin' &&
+    !isEnvTruthy(process.env.CLAUDE_CODE_HOST_REFRESH)
+  )
 }
 
 // --

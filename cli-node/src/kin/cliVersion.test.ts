@@ -5,8 +5,8 @@ test('officialCliVersion defaults to this source, not the old fork', () => {
   const prev = process.env.CLAUDE_CODE_VERSION
   delete process.env.CLAUDE_CODE_VERSION
   try {
-    expect(WRAP_OFFICIAL_CLI_VERSION).toBe('2.1.284')
-    expect(officialCliVersion()).toBe('2.1.284')
+    expect(WRAP_OFFICIAL_CLI_VERSION).toBe('2.1.296')
+    expect(officialCliVersion()).toBe('2.1.296')
     expect(officialCliVersion()).not.toBe('2.8.4')
     expect(officialCliVersion()).not.toBe('2.1.278')
   } finally {

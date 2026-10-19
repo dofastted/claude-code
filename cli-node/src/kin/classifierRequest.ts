@@ -15,8 +15,10 @@ export function validClassifierContext(value: unknown, request: Record<string, u
     return v.stage === undefined && choice?.type === 'tool' && choice.name === 'classify_result' &&
       Array.isArray(request.tools) && request.tools.some(t => t?.name === 'classify_result')
   }
+  // Text verdict tags change across client versions (`<block>`, `<severity>`, …);
+  // only the transcript envelope and the absence of a forced tool define xml.
   return v.format === 'xml' && (v.stage === undefined || ['xml_s1', 'xml_s2', 'fast'].includes(String(v.stage))) &&
-    request.tool_choice === undefined && (JSON.stringify(request.system) || '').includes('<block>') && (JSON.stringify(request.messages) || '').includes('<transcript>')
+    request.tool_choice === undefined && (JSON.stringify(request.messages) || '').includes('<transcript>')
 }
 
 /** Replace transport billing only; text, boundaries and caller cache anchors stay intact. */

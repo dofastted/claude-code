@@ -1,8 +1,11 @@
 import { execa } from 'execa'
-import { getMacOsKeychainStorageServiceName } from 'src/utils/secureStorage/macOsKeychainHelpers.js'
+import {
+  getMacOsKeychainStorageServiceName,
+  usesMacOsKeychain,
+} from 'src/utils/secureStorage/macOsKeychainHelpers.js'
 
 export async function maybeRemoveApiKeyFromMacOSKeychainThrows(): Promise<void> {
-  if (process.platform === 'darwin') {
+  if (usesMacOsKeychain()) {
     const storageServiceName = getMacOsKeychainStorageServiceName()
     const result = await execa(
       `security delete-generic-password -a $USER -s "${storageServiceName}"`,

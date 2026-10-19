@@ -1,5 +1,5 @@
 /**
- * Claude Code 2.1.293 first-party Messages wire order.
+ * Claude Code 2.1.296 first-party Messages wire order.
  * Field-gated betas are added from each request, not process-wide defaults.
  * OAuth is retained only when the credential's base list declares it.
  */

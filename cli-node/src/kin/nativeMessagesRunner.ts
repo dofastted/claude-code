@@ -25,8 +25,8 @@ import {
 	isStaleConnectionHay,
 } from "./staleConnection.js";
 import {
-	KIN_CAPABILITIES,
-	KIN_PROTOCOL_VERSION,
+	CAPABILITIES,
+	PROTOCOL_VERSION,
 	parseStdinLine,
 	slotId,
 	writeStdout,
@@ -34,6 +34,7 @@ import {
 import { classifyKinJobError } from "./jobError.js";
 import { getKinTimezone, getSystemLayout } from "./systemLayout.js";
 import { WRAP_OFFICIAL_CLI_VERSION } from "./cliVersion.js";
+import { kernelEnv } from "./kernelEnv.js";
 import { validClassifierContext, type ClassifierRequestContext } from './classifierRequest.js';
 
 type Phase = "idle" | "running" | "cancelling";
@@ -47,7 +48,7 @@ type SlotState = {
 };
 
 export function nativeSlotCount(): number {
-	const raw = process.env.CLAUDE_CODE_KIN_NATIVE_SLOTS;
+	const raw = kernelEnv("NATIVE_SLOTS");
 	const n = raw ? Number(raw) : 0;
 	if (!Number.isFinite(n) || n <= 0) return 0;
 	return Math.min(20, Math.max(1, Math.floor(n)));
@@ -69,25 +70,25 @@ export async function runNativeMessagesLoop(_ctx: {
 		process.env.CLAUDE_CODE_VERSION || WRAP_OFFICIAL_CLI_VERSION;
 
 	process.stderr.write(
-		`[kin] native_messages loop n=${n} protocol=${KIN_PROTOCOL_VERSION}\n`,
+		`[kin] native_messages loop n=${n} protocol=${PROTOCOL_VERSION}\n`,
 	);
 	const slots = new Map<string, SlotState>();
 	for (let i = 0; i < n; i++) {
 		const id = slotId(i);
 		slots.set(id, { id, phase: "idle" });
 	}
-	const configHash = process.env.CLAUDE_CODE_KIN_CONFIG_HASH;
+	const configHash = kernelEnv("CONFIG_HASH");
 	await writeStdout({
-		type: "kin_host_ready",
-		protocol_version: KIN_PROTOCOL_VERSION,
+		type: "host_ready",
+		protocol_version: PROTOCOL_VERSION,
 		slots: n,
 		system_layout: getSystemLayout(),
 		timezone: getKinTimezone(),
-		capabilities: [...KIN_CAPABILITIES],
+		capabilities: [...CAPABILITIES],
 		...(configHash ? { config_hash: configHash } : {}),
 	});
 	for (const id of slots.keys()) {
-		await writeStdout({ type: "kin_slot_ready", slot_id: id });
+		await writeStdout({ type: "slot_ready", slot_id: id });
 	}
 
 	const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -95,16 +96,16 @@ export async function runNativeMessagesLoop(_ctx: {
 		const msg = parseStdinLine(line);
 		if (!msg) continue;
 		switch (msg.type) {
-			case "kin_job_start":
+			case "job_start":
 				startJob(slots, msg.slot_id, msg.job_id, msg.request, _ctx.options, msg.request_context);
 				break;
-			case "kin_cancel":
+			case "cancel":
 				// Never await here: one cancelled job that is slow to settle must not
 				// stop this loop from reading frames for every other slot.
 				void cancelJob(slots, msg.slot_id, msg.job_id);
 				break;
-			case "kin_ping":
-				void writeStdout({ type: "kin_pong", nonce: msg.nonce });
+			case "ping":
+				void writeStdout({ type: "pong", nonce: msg.nonce });
 				break;
 		}
 	}
@@ -123,13 +124,13 @@ function startJob(
 	requestContext?: ClassifierRequestContext,
 ): void {
 	if (requestContext !== undefined && !validClassifierContext(requestContext, request)) {
-		void writeStdout({ type: 'kin_job_error', job_id: jobId, slot_id: slotIdArg, error: 'Invalid classifier request context', code: 'invalid_request_context', status: 400, error_type: 'invalid_request_error' });
+		void writeStdout({ type: 'job_error', job_id: jobId, slot_id: slotIdArg, error: 'Invalid classifier request context', code: 'invalid_request_context', status: 400, error_type: 'invalid_request_error' });
 		return;
 	}
 	const slot = slots.get(slotIdArg);
 	if (!slot) {
 		void writeStdout({
-			type: "kin_job_error",
+			type: "job_error",
 			job_id: jobId,
 			slot_id: slotIdArg,
 			error: `unknown slot ${slotIdArg}`,
@@ -141,7 +142,7 @@ function startJob(
 	}
 	if (slot.phase !== "idle") {
 		void writeStdout({
-			type: "kin_job_error",
+			type: "job_error",
 			job_id: jobId,
 			slot_id: slot.id,
 			error: `slot ${slot.id} busy phase=${slot.phase}`,
@@ -167,7 +168,7 @@ function startJob(
 }
 
 /**
- * Idempotent: every kin_cancel gets exactly one ack. A running job is acked
+ * Idempotent: every cancel gets exactly one ack. A running job is acked
  * only after its task settled, so the kernel never reuses a slot whose
  * upstream request is still alive. Unknown, finished or duplicate cancels are
  * acked right away; the kernel matches the ack against its own pending cancel.
@@ -187,7 +188,7 @@ async function cancelJob(
 		await slot.task.catch(() => {});
 	}
 	await writeStdout({
-		type: "kin_cancel_ack",
+		type: "cancel_ack",
 		job_id: jobId,
 		slot_id: slotIdArg ?? "",
 	}).catch((err) => {
@@ -267,10 +268,10 @@ async function runJob(
 	const emitRateLimitHeaders = async () => {
 		if (!Object.keys(rateLimitHeaders).length) return;
 		await writeStdout({
-			type: "kin_stream_event",
+			type: "stream_event",
 			job_id: jobId,
 			slot_id: slot.id,
-			event: { type: "kin_response_headers", headers: rateLimitHeaders },
+			event: { type: "response_headers", headers: rateLimitHeaders },
 		});
 	};
 	// Raw failure behind an assistant API-error message; the message itself only has text.
@@ -284,7 +285,7 @@ async function runJob(
 		failure.retry_after ??= rateLimitHeaders["retry-after"];
 		failure.request_id ??= rateLimitHeaders['request-id'];
 		await writeStdout({
-			type: "kin_job_error",
+			type: "job_error",
 			job_id: jobId,
 			slot_id: slot.id,
 			...failure,
@@ -312,6 +313,7 @@ async function runJob(
 			stopSequences,
 			model,
 			signal: abort.signal,
+			wireBody: request,
 			wireMessages: Array.isArray(request.messages)
 				? request.messages
 				: undefined,
@@ -326,7 +328,7 @@ async function runJob(
 			},
 		});
 		// AbortSignal reaches the HTTP client, but the async generator can still await its current read.
-		// Closing the iterator makes cancelJob observe completion and emit kin_cancel_ack.
+		// Closing the iterator makes cancelJob observe completion and emit cancel_ack.
 		const closeStreamOnAbort = () => {
 			void stream.return?.().catch(() => {});
 		};
@@ -340,7 +342,7 @@ async function runJob(
 				if (ev.type === "stream_event") {
 					const rec = ev as { event?: unknown };
 					await writeStdout({
-						type: "kin_stream_event",
+						type: "stream_event",
 						job_id: jobId,
 						slot_id: slot.id,
 						event: rec.event,
@@ -393,7 +395,7 @@ async function runJob(
 
 	await emitRateLimitHeaders();
 	await writeStdout({
-		type: "kin_job_done",
+		type: "job_done",
 		job_id: jobId,
 		slot_id: slot.id,
 		stop_reason: "",

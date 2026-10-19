@@ -535,6 +535,6 @@ function getUsername(): string {
   try {
     return userInfo().username || 'default'
   } catch {
-    return process.env.USER || process.env.USERNAME || 'default'
+    return process.env.USERNAME || 'default'
   }
 }
