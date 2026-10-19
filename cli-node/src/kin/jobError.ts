@@ -19,6 +19,7 @@ export type KinJobErrorCode =
   | 'upstream_stream_interrupted'
   | 'upstream_empty_stream'
   | 'cli_error'
+  | 'cached_microcompact_unavailable'
 
 export type KinJobErrorFields = {
   error: string
@@ -156,6 +157,14 @@ export function classifyKinJobError(
 ): KinJobErrorFields {
   const raw = error instanceof Error ? error.message.trim() : text(field(error, 'message'))
   const msg = clip(raw || message)
+  if (msg.startsWith('cached_microcompact_unavailable:')) {
+    return {
+      error: msg,
+      code: 'cached_microcompact_unavailable',
+      status: 400,
+      error_type: 'invalid_request_error',
+    }
+  }
   if (error instanceof APIError && !(error instanceof APIConnectionError)) {
     return fromApiError(field(error, 'error'), error.status, raw, field(error, 'headers'))
   }
