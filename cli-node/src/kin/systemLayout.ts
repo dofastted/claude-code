@@ -8,8 +8,16 @@
  * Always append `# Environment` + leftover.
  */
 import { randomUUID } from 'node:crypto'
+import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY, SYSTEM_PROMPT_REPORTING_OUTCOMES } from '../constants/prompts.js'
 
 export const IDENTITY = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+const CLI_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
+const CLI_SDK_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."
+const OFFICIAL_IDENTITIES: Record<string, true> = {
+  [IDENTITY]: true,
+  [CLI_IDENTITY]: true,
+  [CLI_SDK_IDENTITY]: true,
+}
 
 export type SystemLayout = 'stock' | 'zero' | 'identity'
 
@@ -58,6 +66,29 @@ function withCchPlaceholder(header: string): string {
   const reset = header.replace(/\s*\bcch=[^;]*;?/gi, '')
   const base = reset.endsWith(';') ? reset : `${reset};`
   return `${base} cch=00000;`
+}
+
+/**
+ * A panel-assembled official system is already billing, identity, reporting,
+ * static, dynamic. Joining those into one leftover makes `mpo` unable to
+ * split them. Keep the array. A single caller leftover still gets the layout
+ * prefix and the slot environment.
+ */
+export function preserveOfficialSystem(systemPrompt: readonly string[]): string[] | null {
+  const blocks = systemPrompt
+    .filter((block) => (block || '').trim())
+    .filter((block) => block !== SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
+  if (blocks.length < 4) return null
+  const [billing, identity, reporting] = blocks
+  if (!billing.trim().startsWith('x-anthropic-billing-header')) return null
+  if (!OFFICIAL_IDENTITIES[identity.trim()]) return null
+  if (reporting !== SYSTEM_PROMPT_REPORTING_OUTCOMES) return null
+  // Panel rendering strips the marker so HTTP never sends the literal. Put it
+  // back between the static block and the first dynamic block.
+  const normalized = blocks.map((block) =>
+    block.trim().startsWith('x-anthropic-billing-header') ? withCchPlaceholder(block) : block,
+  )
+  return [...normalized.slice(0, 4), SYSTEM_PROMPT_DYNAMIC_BOUNDARY, ...normalized.slice(4)]
 }
 
 export function layoutSystemBlocks(opts: { attribution: string; leftover?: string }): string[] {
@@ -113,12 +144,15 @@ function blockText(block: unknown): string {
   return typeof block.text === 'string' ? block.text : ''
 }
 
-/** A billed native wire system is already assembled, including official subagents. */
+/** A native wire system is already assembled. Billing is one shape; the official two-block body is another. */
 export function isStandardPersonaSystem(system: unknown): boolean {
-  return Array.isArray(system) && system.some((block) => /^\s*x-anthropic-billing-header:/i.test(blockText(block)))
+  return Array.isArray(system) && system.length > 0 && system.every((block) => {
+    if (!block || typeof block !== 'object' || !('text' in block)) return false
+    return typeof block.text === 'string'
+  })
 }
 
-/** Keep Node's system blocks, including a zero-width identity slot. */
+/** Keep Node's system blocks, including a zero-width identity slot and an omitted TTL. */
 export function wireSystemBlocks(
   system: unknown,
 ): Array<{ type: 'text'; text: string; cache_control?: Record<string, unknown> }> | null {

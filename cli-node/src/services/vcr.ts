@@ -21,6 +21,7 @@ import { normalizeMessagesForAPI } from '../utils/messages.js'
 import { jsonParse, jsonStringify } from '../utils/slowOperations.js'
 
 function shouldUseVCR(): boolean {
+  if (process.env.CLAUDE_CODE_SKIP_VCR === '1') return false
   if (process.env.NODE_ENV === 'test') {
     return true
   }

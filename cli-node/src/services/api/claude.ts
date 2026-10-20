@@ -55,6 +55,8 @@ import {
   getSystemLayout,
   layoutSystemBlocks,
   leftoverFromSystemPrompt,
+  preserveOfficialSystem,
+  wireSystemBlocks,
 } from '../../kin/systemLayout.js'
 import {
   getEmptyToolPermissionContext,
@@ -1183,6 +1185,10 @@ export function stripExcessMediaItems(
         }
   }) as (UserMessage | AssistantMessage)[]
 }
+/** Tests replace `current` to read the body that would be sent. Production leaves it unset. */
+export const assembledRequest = {
+  current: undefined as ((params: Record<string, unknown>) => void) | undefined,
+}
 
 async function* queryModel(
   messages: Message[],
@@ -1533,7 +1539,10 @@ async function* queryModel(
   // filter(Boolean) works by converting each element to a boolean - empty strings become false and are filtered out.
   const kinSystemLayout = getSystemLayout()
   const kinQuery = isKinQuerySource(options.querySource)
-  if (kinQuery && options.requestContext) {
+  const preservedOfficial = preserveOfficialSystem(systemPrompt)
+  if (preservedOfficial) {
+    systemPrompt = asSystemPrompt(preservedOfficial)
+  } else if (kinQuery && options.requestContext) {
     // Classification has its own system contract, independent of panel layout.
     systemPrompt = asSystemPrompt(systemPrompt)
   } else if (kinQuery && kinSystemLayout !== 'stock') {
@@ -1602,6 +1611,8 @@ async function* queryModel(
 
   const enablePromptCaching =
     options.enablePromptCaching ?? getPromptCachingEnabled(options.model)
+  const forwardedWireSystem =
+    kinQuery && !options.requestContext ? wireSystemBlocks(options.wireSystem) : null
   const system = options.requestContext
     ? classifierSystemBlocks(
         options.wireSystem,
@@ -1614,7 +1625,8 @@ async function* queryModel(
           turnOrigin: resolveTurnOrigin(options.querySource),
         }),
       )
-    : buildSystemPromptBlocks(systemPrompt, enablePromptCaching, {
+    : forwardedWireSystem ??
+      buildSystemPromptBlocks(systemPrompt, enablePromptCaching, {
         skipGlobalCacheForSystemPrompt: needsToolBasedCacheMarker,
         querySource: options.querySource,
       })
@@ -2064,6 +2076,7 @@ async function* queryModel(
         ? mergeOfficialExtraBetas(gatedBetas)
         : gatedBetas
     lastRequestBetas = params.betas
+    assembledRequest.current?.(params)
     return params
   }
 

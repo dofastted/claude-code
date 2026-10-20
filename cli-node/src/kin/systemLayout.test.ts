@@ -143,7 +143,7 @@ test('leftover drops only owned slot personas alongside caller text', () => {
 test('billed wire systems preserve caller blocks and cache markers while CCH is normalized', () => {
   const billing = 'x-anthropic-billing-header: cc_version=2.1.296; cc_entrypoint=sdk-cli;'
   const cache = { type: 'ephemeral', ttl: '1h', scope: 'global' }
-  expect(wireSystemBlocks([{ type: 'text', text: CALLER }])).toBeNull()
+  expect(wireSystemBlocks('not-blocks')).toBeNull()
   for (const identity of [IDENTITY, '\u200b', 'You are a file search specialist for Claude Code.']) {
     const system = [
       { type: 'text', text: billing, cache_control: cache },
@@ -158,4 +158,9 @@ test('billed wire systems preserve caller blocks and cache markers while CCH is 
     expect(system[0]!.text).toBe(billing)
     expect(wireSystemBlocks(kept)![0]!.text).toBe(kept[0]!.text)
   }
+  const official = [
+    { type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude.", cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: '\nYou are an agent working with the user.', cache_control: { type: 'ephemeral' } },
+  ]
+  expect(wireSystemBlocks(official)).toEqual(official)
 })
