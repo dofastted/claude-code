@@ -620,3 +620,12 @@ CLI 原请求作为 `wireBody` 保留，在最终 SDK params（含自产 cache m
 - 仍只修复“客户端取消就重建”这一条路径；空响应恢复、sticky TTL、解绑及配置切换规则未变，不宣称完整实现“仅实际切 VM 才换 Session”，也未抓最终 TLS wire 或证明真实上游缓存命中。
 - PR CI [39140646473](https://github.com/dofastted/vm2api/actions/runs/39140646473) 的 unit / worker / kernel / web / arm64 五项全部通过，Approval Router、Bugbot、安全审查也全部通过，共 8/8；PR 保持 OPEN，未合并、未开启自动合并、未发布应用版本。
 
+## 2026-10-20 aws-east 集群 VM 迁往 aws-jp
+
+- 按用户授权将 `aws-vm`、`jp-max`、`jp-pro`、`jp-pro2`、`vm-05`、`vm-21` 从 `node-6beb967a`（`aws-east` / `3.15.103.185`）迁到已注册的 `node-7b55028e`（`aws-jp` / `35.72.177.127`）。VM ID、凭证、代理、指纹、机器信息和原调度字段保留；未改应用代码、payload 或版本号。
+- 目标 Ubuntu 24.04 / amd64；Docker `29.8.1`、containerd `2.3.6` 与源一致；补齐 2 GiB swap 并持久化。六槽停调度且连续三次 inflight / queued 为零后停止源容器和 Docker/containerd，离线复制 `/var/lib/docker`、`/var/lib/containerd`、`/home/ubuntu/.vm2api`、`/etc/containerd`。
+- 冷归档 `3831441227` 字节，SHA256 `fdfc63da82eac8f2eb0f4d856c5e810670e4148ced63594950f67143021c9d39`。恢复时保留全部 xattrs（含 trusted/security）、ACL 和数值 owner；93 个持久文件摘要与 175 项扩展属性摘要完全一致，24 个容器 ID 保留（含历史停止回滚容器）。40 条自定义出口/隔离规则恢复；仅启动原来的 4 个主容器和 5 个出口容器。
+- 没有现成的跨节点迁移 API；Node 全局 hold 排空后仅 stop/start 一次，定向修改六份记录的 `node_id`、`runtime.node_id` 及 kernel/worker socket 节点前缀，再恢复原状态与全部调度字段。Go 前门 PID `996741` 未变；18 个 HostDzire 本机容器的 ID、状态、StartedAt、image 均与切换前一致。14 份 VM 的放置、原状态/调度、身份/凭证/代理/policy 和容器 ID 核对全部通过。
+- 日本侧 `jp-max`、`jp-pro`、`jp-pro2` 完整服务诊断通过，三次真实 Haiku 测试均 HTTP 200 / pong；另经 Go `8787` 前门固定 `jp-pro` 完成 200 / pong，TLS 公网入口域名经本机 resolve 返回 front-door health ok。`vm-05` 保持原 paused 记录但容器 Up，其 SSH、中继、出口、容器和内核检查均正常，诊断总结果因原 paused 状态返回 `vm_not_running`，不伪称完整诊断通过。`aws-vm` 主容器仍 Created，`vm-21` 仍 stopped / 无容器，未为验收启动这两个停止槽。
+- 源 Docker、docker.socket、containerd 已 inactive + disabled，防止旧副本重启形成双活；源节点记录与数据保留，不销毁 AWS 实例。源/目标冷备均在 `/home/ubuntu/migration-20261020/`；控制面证据与原 VM 记录在 `/opt/vm2api/.migration-aws-east-to-jp-20261020/`（0700，证据 0600）。回滚前必须排空并停日本副本，同步迁移后可能刷新的凭证/持久状态，才能恢复原节点放置和启动源副本；不能双活。
+- 数据传输曾因本机中转 600 秒超时和 SSH skill 无本地 agent 时仍转发 agent 的问题中断/阻塞；最终用源机临时受限密钥及 `IdentityAgent none` 完成服务器直传（303 秒）。临时密钥、授权行与源 SSH 临时配置已移除；原用户登录密钥保留。源冷停约 03:52 UTC，控制面切换约 04:46 UTC，完整验收与调度恢复约 04:55 UTC；未声称无停机迁移。
