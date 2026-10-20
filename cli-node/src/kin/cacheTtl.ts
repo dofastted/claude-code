@@ -252,10 +252,10 @@ function dropThinkingMarkers(params: { messages?: unknown }) {
   }
 type MessageBlock = { type?: unknown; text?: unknown; cache_control?: unknown };
 
-/** Official CLI keeps one message marker. Caching places it on the current tail; otherwise only extras are removed. */
+/** Official CLI keeps one message marker. Extras are removed. Never invent a ttl the caller omitted. */
 export function keepSingleMessageCacheMarker(
   messages: unknown,
-  { ensureTail = false, ttl = "1h" as CacheTtl } = {},
+  { ensureTail = false } = {},
 ) {
   if (!Array.isArray(messages)) return;
   const marked: MessageBlock[] = [];
@@ -270,7 +270,7 @@ export function keepSingleMessageCacheMarker(
       message.content = [block];
       tail = [block];
       continue;
-}
+    }
     if (!Array.isArray(content) || content.length === 0) continue;
     const blocks: MessageBlock[] = [];
     for (const block of content) {
@@ -290,7 +290,7 @@ export function keepSingleMessageCacheMarker(
     if (block !== anchor) delete block.cache_control;
   }
   if (!ensureTail || !anchor || anchor.cache_control) return;
-  anchor.cache_control = { type: "ephemeral", ttl };
+  anchor.cache_control = { type: "ephemeral" };
 }
 
 function capCacheMarkers(
@@ -311,11 +311,12 @@ function capCacheMarkers(
   }
 }
 
-/** Fill cache_control that cli-node just added without a ttl. Leave explicit values. */
+/** Fill a ttl only when some sibling marker already named one. An omitted ttl is the official 5m default; writing 1h changes the wire. */
 export function fillMissingCacheTtl(
   params: { system?: unknown; tools?: unknown; messages?: unknown },
   ttl: CacheTtl,
 ) {
+  if (!explicitCacheTtl([params.system, params.tools, params.messages])) return
   const system = Array.isArray(params.system) ? params.system : [params.system]
   for (const block of system) stampBlock(block, ttl)
   if (Array.isArray(params.tools)) {

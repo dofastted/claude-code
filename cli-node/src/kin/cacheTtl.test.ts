@@ -44,21 +44,22 @@ test('an existing 5m wins over a panel 1h', () => {
   expect(messages[0]!.content[0]!.cache_control.ttl).toBe('5m')
 })
 
-test('no existing marker uses the panel value', () => {
+test('omitted ttl stays omitted when no sibling names one', () => {
   const system = [{ type: 'text', text: 'prefix', cache_control: { type: 'ephemeral' } }]
   const ttl = resolveKinCacheTtl({ tools: [], messages: [], panelTtl: '5m' })
   fillMissingCacheTtl({ system }, ttl)
-  expect(system[0]!.cache_control).toEqual({ type: 'ephemeral', ttl: '5m' })
+  expect(ttl).toBe('5m')
+  expect(system[0]!.cache_control).toEqual({ type: 'ephemeral' })
 })
 
-test('no panel file falls back to 1h', () => {
+test('no panel file falls back to 1h without writing an omitted ttl', () => {
   const system = [{ type: 'text', text: 'prefix', cache_control: { type: 'ephemeral' } }]
   const ttl = resolveKinCacheTtl({
     panelTtl: readPanelCacheTtl('/no/such/kernel.json'),
   })
   fillMissingCacheTtl({ system }, ttl)
   expect(ttl).toBe('1h')
-  expect(system[0]!.cache_control.ttl).toBe('1h')
+  expect(system[0]!.cache_control).toEqual({ type: 'ephemeral' })
 })
 
 test('readPanelCacheTtl reads default_cache_ttl', () => {
@@ -276,7 +277,7 @@ test('wire message markers reserve budget while owned system TTLs are filled', (
   const tools = [{ name: 'Read', cache_control: { type: 'ephemeral' } }]
   applyKinOwnedCacheMarkers({ system, tools, messages }, '1h', { preserveMessages: true })
   expect(messages).toEqual(before)
-  expect(system[0]!.cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
+  expect(system[0]!.cache_control).toEqual({ type: 'ephemeral' })
   expect(tools[0]!.cache_control).toBeUndefined()
 })
 
@@ -326,7 +327,7 @@ test('cached microcompact defaults off and only an explicit boolean turns it on'
   }
 })
 
-test('message markers collapse to the current tail before TTL fill', () => {
+test('message markers collapse to the current tail and keep an omitted ttl', () => {
   const messages = [
     {
       role: 'user',
@@ -340,7 +341,7 @@ test('message markers collapse to the current tail before TTL fill', () => {
   keepSingleMessageCacheMarker(messages)
   applyKinOwnedCacheMarkers({ messages }, '1h')
   expect(messages[0]!.content[0]!.cache_control).toBeUndefined()
-  expect(messages[1]!.content[0]!.cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
+  expect(messages[1]!.content[0]!.cache_control).toEqual({ type: 'ephemeral' })
 })
 
 test('prompt caching places one marker on an unmarked current tail', () => {
@@ -354,10 +355,10 @@ test('prompt caching places one marker on an unmarked current tail', () => {
       ],
     },
   ]
-  keepSingleMessageCacheMarker(messages, { ensureTail: true, ttl: '5m' })
+  keepSingleMessageCacheMarker(messages, { ensureTail: true })
   expect(messages[0]!.content).toEqual([{ type: 'text', text: 'older' }])
   expect(messages[1]!.content[0]!.cache_control).toBeUndefined()
-  expect(messages[1]!.content[1]!.cache_control).toEqual({ type: 'ephemeral', ttl: '5m' })
+  expect(messages[1]!.content[1]!.cache_control).toEqual({ type: 'ephemeral' })
 })
 
 test('disabled caching and skipCacheWrite do not create a tail marker', () => {
