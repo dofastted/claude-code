@@ -629,3 +629,12 @@ CLI 原请求作为 `wireBody` 保留，在最终 SDK params（含自产 cache m
 - 日本侧 `jp-max`、`jp-pro`、`jp-pro2` 完整服务诊断通过，三次真实 Haiku 测试均 HTTP 200 / pong；另经 Go `8787` 前门固定 `jp-pro` 完成 200 / pong，TLS 公网入口域名经本机 resolve 返回 front-door health ok。`vm-05` 保持原 paused 记录但容器 Up，其 SSH、中继、出口、容器和内核检查均正常，诊断总结果因原 paused 状态返回 `vm_not_running`，不伪称完整诊断通过。`aws-vm` 主容器仍 Created，`vm-21` 仍 stopped / 无容器，未为验收启动这两个停止槽。
 - 源 Docker、docker.socket、containerd 已 inactive + disabled，防止旧副本重启形成双活；源节点记录与数据保留，不销毁 AWS 实例。源/目标冷备均在 `/home/ubuntu/migration-20261020/`；控制面证据与原 VM 记录在 `/opt/vm2api/.migration-aws-east-to-jp-20261020/`（0700，证据 0600）。回滚前必须排空并停日本副本，同步迁移后可能刷新的凭证/持久状态，才能恢复原节点放置和启动源副本；不能双活。
 - 数据传输曾因本机中转 600 秒超时和 SSH skill 无本地 agent 时仍转发 agent 的问题中断/阻塞；最终用源机临时受限密钥及 `IdentityAgent none` 完成服务器直传（303 秒）。临时密钥、授权行与源 SSH 临时配置已移除；原用户登录密钥保留。源冷停约 03:52 UTC，控制面切换约 04:46 UTC，完整验收与调度恢复约 04:55 UTC；未声称无停机迁移。
+
+## 2026-10-20 vm-19 从 HostDzire 本机迁往 aws-jp
+
+- 用户指定的 `vm-19` 账号核对一致（account UUID `0dd94d41-a7b8-4688-b602-6ea666fd8318`）。从本机 `kin-19`（`320d1a17c671…`）迁到 `node-7b55028e`，新容器 `1955ebfff974…`，镜像 `vm2api/kin-slot-ubuntu-24.04:81e9d304afdf`。VM ID、凭证、代理、机器/指纹信息、policy、seed_policy 和原 running / schedulable=true / schedule_manual=true 全部核对保留；1 GiB 内存及原 CPU/进程限制保留，执行用户按节点约定改为 `1000:1000`。
+- 先不停机预传 `.kin` 与独立 guest-bin（79964488 字节，SHA256 `b02217284c9d33c7fff0d89eefee26676d1db4e351830dcc5ba511197d5c77d6`）；仅 vm-19 停调度，等待原在途请求结束并连续三次零 inflight/queued，再停止旧容器、复制最终可写数据。671 个持久文件/链接逐项校验一致；`.claude` 转到节点独立 `claude/` 嵌套挂载，机器 ID 与凭证文件未重置。原生 kernel/CLI 实际 ELF 与目标镜像字节一致。
+- 标准远端容器模板不包含本机 persona。此次在标准镜像/网络/布局配置上额外保留五个 persona bind（hardware、DMI、kin-computer、kin-persona、hostname）、独立 guest-bin 及源端点 MAC；先创建停止的目标容器，再定向切换节点/socket 路径并用现有 reload 原地启动。源容器改名 `rollback-vm19-to-jp-20261020`，保持 exited 且 restart=no，没有删除源目录或容器；本次未修改应用源码或主动重启 Node/Go。
+- 目标完整 diagnose 通过，内核 20 ready；面板 Haiku 与 Go 8787 前门固定 vm-19 均真实 200 / pong，调度按原值恢复。12 个其他 VM 的放置/状态/调度/身份/代理/policy，以及 17 个其他本机容器的 ID/状态/StartedAt/image 均与冷切换前一致；既有日本主槽 ID/StartedAt 也未变。Go PID `996741` 不变。准备及验收期间另观测到 Node 于 06:35、06:55 UTC 重启（非本次迁移脚本发起），不宣称 Node PID 不变；06:55 重启后重新通过真实请求与最终状态核验。
+- 备份和完整证据位于 `/opt/vm2api/.migration-vm19-to-jp-20261020/`（0700），包括原记录、冷文件清单、原容器定义、带 persona 的 destination-body、provision-result、diagnose/test-chat/Go smoke 与 final-verification。目标归档/校验记录在 `/home/ubuntu/migration-20261020/vm19-*`。后续镜像/布局重建必须保留这次 persona binds 和 MAC，不能用缺少这些挂载的标准模板直接覆盖；回滚需先排空停止日本副本并同步最新凭证/持久状态，禁止双活。
+- 冷停时间约 06:44:48 UTC，目标容器于 06:52:59 UTC 启动。SFTP 程序层同步较慢使调用方 240 秒与 reload 客户端 150 秒等待超时，服务端仍继续完成；按进程、文件时间和运行状态核实后仅补恢复状态/调度，没有盲目重复创建或重建。
