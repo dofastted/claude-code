@@ -28,6 +28,7 @@ import {
 } from 'src/services/analytics/index.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
 import { logForDebugging } from 'src/utils/debug.js'
+import { applySafeConfigEnvironmentVariables, dropUnsafeSettingsEnvironment } from 'src/utils/managedEnv.js'
 import {
   logForDiagnosticsNoPII,
   withDiagnosticsTiming,
@@ -496,6 +497,9 @@ export async function runHeadless(
   // Dynamic import: nativeMessagesRunner pulls services/api/claude.js.
   // A static import would load the kin host into every headless -p start.
   if (process.env.CLAUDE_CODE_NATIVE_SLOTS) {
+    // Slot host is not a trusted print session. Keep the safe settings.json
+    // allowlist and drop LD_PRELOAD/PATH that the early trusted apply injected.
+    dropUnsafeSettingsEnvironment()
     const { runNativeMessagesLoop } = await import('../kin/nativeMessagesRunner.js')
     await runNativeMessagesLoop({ options })
     return

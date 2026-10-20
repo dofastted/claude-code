@@ -178,6 +178,18 @@ export function applySafeConfigEnvironmentVariables(): void {
 }
 
 /**
+ * Slot hosts never run the trusted print path. Settings may still contain
+ * LD_PRELOAD / PATH from an old seed; drop anything outside the safe list
+ * after the early trusted-source apply.
+ */
+export function dropUnsafeSettingsEnvironment(): void {
+  const settingsEnv = filterSettingsEnv(getSettings_DEPRECATED()?.env)
+  for (const key of Object.keys(settingsEnv)) {
+    if (!SAFE_ENV_VARS.has(key.toUpperCase())) delete process.env[key]
+  }
+}
+
+/**
  * Apply environment variables from settings to process.env.
  * This applies ALL environment variables (except provider-routing vars when
  * CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST is set — see filterSettingsEnv) and
