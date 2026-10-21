@@ -172,20 +172,39 @@ function skipMaxTokens(s: string): string {
   return cut(s, j, k)
 }
 
+function setSystemCch(body: unknown, value: string): boolean {
+  if (!body || typeof body !== 'object' || !('system' in body)) return false
+  let found = false
+  const rewrite = (text: string) =>
+    text.replace(
+      /(^\s*x-anthropic-billing-header:[^\r\n]*?\bcch=)[0-9a-f]{5}(?=;)/im,
+      (_match, prefix: string) => {
+        found = true
+        return `${prefix}${value}`
+      },
+    )
+  if (typeof body.system === 'string') body.system = rewrite(body.system)
+  else if (Array.isArray(body.system)) {
+    for (const block of body.system) {
+      if (block && typeof block === 'object' && typeof block.text === 'string') {
+        block.text = rewrite(block.text)
+      }
+    }
+  }
+  return found
+}
+
 export function projectForCch(body: string): string {
   let material = body
   try {
     const parsed = JSON.parse(body) as unknown
+    setSystemCch(parsed, '00000')
     const compact = JSON.stringify(parsed)
     if (typeof compact === 'string') material = compact
   } catch {
     // Keep non-JSON bodies unchanged; the SDK Messages request is JSON.
   }
-  const reset = material.replace(
-    /(x-anthropic-billing-header:[^"]*?\bcch=)[0-9a-f]{5}(?=;)/i,
-    (_match, prefix: string) => `${prefix}00000`,
-  )
-  return skipMaxTokens(skipCredit(skipFallbacks(blankStringModels(reset))))
+  return skipMaxTokens(skipCredit(skipFallbacks(blankStringModels(material))))
 }
 
 export function computeCch(body: string): string {
@@ -196,15 +215,14 @@ export function computeCch(body: string): string {
 
 /** Seal billing CCH. Enabled requests rewrite any five-hex digest, not only the placeholder. */
 export function stampCchBody(body: string, enabled = true): string {
-  const billingCch = /(x-anthropic-billing-header:[^"]*?\bcch=)[0-9a-f]{5}(?=;)/i
-  if (!enabled || !billingCch.test(body)) return body
-  let wireBody = body
+  if (!enabled) return body
+  let parsed: unknown
   try {
-    const compact = JSON.stringify(JSON.parse(body) as unknown)
-    if (typeof compact === 'string') wireBody = compact
+    parsed = JSON.parse(body)
   } catch {
-    // Keep non-JSON bodies unchanged.
+    return body
   }
-  const placeholder = wireBody.replace(billingCch, (_match, prefix: string) => `${prefix}00000`)
-  return placeholder.replace(billingCch, (_match, prefix: string) => `${prefix}${computeCch(placeholder)}`)
+  if (!setSystemCch(parsed, '00000')) return body
+  setSystemCch(parsed, computeCch(JSON.stringify(parsed)))
+  return JSON.stringify(parsed)
 }

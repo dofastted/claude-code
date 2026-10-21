@@ -63,9 +63,17 @@ export function finalizeZeroBilling(attribution: string): string {
 }
 
 function withCchPlaceholder(header: string): string {
-  const reset = header.replace(/\s*\bcch=[^;]*;?/gi, '')
-  const base = reset.endsWith(';') ? reset : `${reset};`
-  return `${base} cch=00000;`
+  let found = false
+  const reset = header.replace(/\bcch=[^;]*;?/gi, () => {
+    if (found) return ''
+    found = true
+    return 'cch=00000;'
+  })
+  if (found) return reset
+  if (/\bcc_entrypoint=[^;]*;/.test(reset)) {
+    return reset.replace(/(\bcc_entrypoint=[^;]*;)/, '$1 cch=00000;')
+  }
+  return `${reset.endsWith(';') ? reset : `${reset};`} cch=00000;`
 }
 
 /**

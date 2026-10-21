@@ -36,14 +36,13 @@ import {
   resolveTurnOrigin,
 } from '../../constants/system.js'
 import {
-  applyKinOwnedCacheMarkers,
   explicitCacheTtl,
   readPanelCachedMicrocompactEnabled,
   readPanelCacheTtl,
-  resolveKinCacheTtl,
 } from '../../kin/cacheTtl.js'
 import { mergeOfficialExtraBetas } from '../../kin/officialBetas.js'
 import { assembleMessageRequest } from './requestBody.js'
+import { assembleOfficialPromptBody } from '../../../../../src/lib/protocol/anthropic-messages.mjs'
 import { assembleApiMetadata } from '../../kin/officialFingerprint.js'
 import {
   setupTokenBetaHeader,
@@ -2031,21 +2030,7 @@ async function* queryModel(
           consumedPinnedEdits,
           options.skipCacheWrite,
         )
-    if (isKinQuerySource(options.querySource) && !options.requestContext) {
-      const requestTtl = explicitCacheTtl([system, allTools, apiMessages])
-      const ttl = resolveKinCacheTtl({
-        system,
-        tools: allTools,
-        messages: apiMessages,
-        panelTtl: requestTtl ? undefined : readPanelCacheTtl(),
-      })
-      applyKinOwnedCacheMarkers(
-        { system, tools: allTools, messages: apiMessages },
-        ttl,
-      )
-    }
-
-    const params = assembleMessageRequest({
+    let params = assembleMessageRequest({
       model: normalizeModelStringForAPI(options.model),
       messages: apiMessages,
       system,
@@ -2070,6 +2055,12 @@ async function* queryModel(
       outputConfig: outputConfig as Record<string, unknown>,
       speed,
     })
+    if (isKinQuerySource(options.querySource) && !options.requestContext) {
+      // The gateway's user marker carries the selected panel TTL. Template
+      // markers and SDK extra-body merges must not override that policy.
+      const ttl = explicitCacheTtl([apiMessages]) ?? readPanelCacheTtl() ?? '1h'
+      params = assembleOfficialPromptBody(params, { ttl }) as typeof params
+    }
     const gatedBetas = withRequestProtocolBetas(requestBetas, params)
     params.betas =
       isKinQuerySource(options.querySource) && !inferenceOnly

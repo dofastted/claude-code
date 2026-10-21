@@ -361,17 +361,16 @@ function buildFetch(fetchOverride: ClientOptions['fetch'], source: string | unde
     if (injectClientRequestId && !headers.has(CLIENT_REQUEST_ID_HEADER)) {
       headers.set(CLIENT_REQUEST_ID_HEADER, randomUUID())
     }
-    if (typeof body === 'string') {
-      const stamped = stampCchBody(body, readPanelCchEnabled())
-      if (stamped !== body) {
-        body = stamped
-        headers.delete('content-length')
+    if (typeof body === 'string' || body instanceof Uint8Array) {
+      const text = typeof body === 'string' ? body : new TextDecoder().decode(body)
+      let wire = text
+      if (headers.get('content-type')?.includes('application/json')) {
+        // Compact independently of CCH policy, after every SDK body mutation.
+        wire = JSON.stringify(JSON.parse(text))
       }
-    } else if (body instanceof Uint8Array) {
-      const text = new TextDecoder().decode(body)
-      const stamped = stampCchBody(text, readPanelCchEnabled())
+      const stamped = stampCchBody(wire, readPanelCchEnabled())
       if (stamped !== text) {
-        body = new TextEncoder().encode(stamped)
+        body = typeof body === 'string' ? stamped : new TextEncoder().encode(stamped)
         headers.delete('content-length')
       }
     }
