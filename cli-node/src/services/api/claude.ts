@@ -2059,7 +2059,7 @@ async function* queryModel(
       // The gateway's user marker carries the selected panel TTL. Template
       // markers and SDK extra-body merges must not override that policy.
       const ttl = explicitCacheTtl([apiMessages]) ?? readPanelCacheTtl() ?? '1h'
-      params = assembleOfficialPromptBody(params, { ttl }) as typeof params
+      params = assembleOfficialPromptBody(params, { ttl, preserveMessageMarker: true }) as typeof params
     }
     const gatedBetas = withRequestProtocolBetas(requestBetas, params)
     params.betas =
