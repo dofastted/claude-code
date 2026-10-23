@@ -71,7 +71,8 @@ export function attributionGates(isSubscriber: boolean): {
   const provider = getAPIProvider()
   const firstPartySub = provider === 'firstParty' && isSubscriber
   return {
-    includeCch: firstPartySub || provider === 'vertex',
+    // Billing always carries the placeholder; the panel controls sealing.
+    includeCch: true,
     includeSubscriberFields: firstPartySub,
   }
 }
