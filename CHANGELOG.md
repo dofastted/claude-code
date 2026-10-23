@@ -7,6 +7,8 @@
 - `getUserAgent` 与 `officialCliUserAgent` 的出站入口固定为 `cli`；不改 `CLAUDE_CODE_ENTRYPOINT`，避免影响工具/运行模式开关，保留 agent-sdk、client-app 与 workload 后缀。
 - SDK fetch 统一发送 `Accept: application/json, text/event-stream`、`Accept-Encoding: gzip, br`；客户端的毫秒 timeout 转成秒头，保留自定义头覆盖。最终字符串 / 字节请求体在 CCH 完成后计算 `Content-Length`，不提前计算 envelope 长度，不向 SSE 响应填假长度。
 - 真实本地 HTTP + SDK 回归覆盖多字节正文、最终 CCH/长度与 gzip JSON / Brotli SSE 解压；不根据 API-key 样本删减 OAuth/能力 beta。当前生产不自动切换，需后续部署新 CLI 才会生效。
+- 本地编译压缩完成：源码提交 `30b1f60`，生产兼容构建固定在同仓工作树 `feat/outbound-303@84e6c16`，未带入主工作树的其他 WIP。目标 `bun-linux-x64-baseline`，0 missing modules；UPX 5.0.2 `--best --lzma` 后为 27175592 字节（plain 111220864 字节），`upx -t` 与压缩 ELF 的真实链路 e2e 6/6 均通过。
+- 构建产物在 `~/.vm2api-private/replay-303/bin/`：`cli-node.headers-84e6c16.plain` SHA256 `91402b18768a6c1ce4f78d9dbd779cd5e519906f952f1781213a8649ee31a84a`；`cli-node.headers-84e6c16.upx` SHA256 `4fb46a0c28bae1675923c0d88ba6a98495e4b1a427a4e1bd260cb80ed2e18e90`。未提交二进制、未覆盖交付模板、未 push、未部署。
 
 ## 2026-10-18 — 协议页集中设置与 CCH 关闭固定五零（未发布）
 
