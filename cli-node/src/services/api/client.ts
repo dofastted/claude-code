@@ -19,6 +19,7 @@ import { getOauthConfig } from '../../constants/oauth.js'
 import { isDebugToStdErr, logForDebugging } from '../../utils/debug.js'
 import { stampCchBody } from '../../utils/cch.js'
 import { readPanelCchEnabled } from '../../kin/cacheTtl.js'
+import { reportOutboundHeaders } from '../../kin/outboundHeaders.js'
 import {
   applyOfficialOutboundHeaders,
   claudeCodeIdentityHeaders,
@@ -353,7 +354,7 @@ function buildFetch(fetchOverride: ClientOptions['fetch'], source: string | unde
   // Only send to the first-party API — Bedrock/Vertex/Foundry don't log it
   // and unknown headers risk rejection by strict proxies (inc-4029 class).
   const injectClientRequestId = getAPIProvider() === 'firstParty' && isFirstPartyAnthropicBaseUrl()
-  return (input, init) => {
+  return async (input, init) => {
     // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins
     const headers = new Headers(init?.headers)
     let body = init?.body
@@ -403,6 +404,8 @@ function buildFetch(fetchOverride: ClientOptions['fetch'], source: string | unde
     } catch {
       // never let logging crash the fetch
     }
+    const url = input instanceof Request ? input.url : String(input)
+    if (/\/v1\/messages\/?$/.test(new URL(url).pathname)) await reportOutboundHeaders(headers)
     return inner(input, { ...init, headers, body })
   }
 }

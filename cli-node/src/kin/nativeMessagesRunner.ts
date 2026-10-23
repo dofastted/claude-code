@@ -36,6 +36,7 @@ import { getKinTimezone, getSystemLayout } from "./systemLayout.js";
 import { WRAP_OFFICIAL_CLI_VERSION } from "./cliVersion.js";
 import { kernelEnv } from "./kernelEnv.js";
 import { validClassifierContext, type ClassifierRequestContext } from './classifierRequest.js';
+import { withOutboundHeaders } from './outboundHeaders.js';
 
 type Phase = "idle" | "running" | "cancelling";
 
@@ -157,7 +158,16 @@ function startJob(
 	slot.phase = "running";
 	slot.jobId = jobId;
 	slot.abort = abort;
-	slot.task = runJob(slot, jobId, request, hostOptions, abort, requestContext).finally(() => {
+	slot.task = withOutboundHeaders(
+		(headers) =>
+			writeStdout({
+				type: "stream_event",
+				job_id: jobId,
+				slot_id: slot.id,
+				event: { type: "kin_outbound_headers", headers },
+			}),
+		() => runJob(slot, jobId, request, hostOptions, abort, requestContext),
+	).finally(() => {
 		if (slot.jobId === jobId) {
 			slot.phase = "idle";
 			slot.jobId = undefined;

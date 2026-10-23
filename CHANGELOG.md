@@ -2,6 +2,13 @@
 
 记录本地源码、构建和明确标注的部署结果；未标注上线的记录不代表已发布、已部署或已同步到运行中的槽位。
 
+## 2026-10-24 — CLI 最终出站请求头回传（未发布、未部署）
+
+- 原生 job 通过 AsyncLocalStorage 隔离请求头观察者；SDK 最终 fetch 前、CCH 与 Content-Length 处理后采集，不重新组装请求或修改正文。凭证及未知自定义头值在 CLI 内先脱敏，再通过已有 `stream_event` 任务通道回传。Rust 不改动、不重编。
+- Node 消费内部事件、写 debug 的 `outbound_headers` 与 `outbound_headers_source=cli_final`，不转发客户端、不触发提交/TTFT/上游 idle 计时；每跳清空旧快照，旧 CLI 未回传则 unavailable。worker envelope 头另存，正文仍是 envelope；面板区分最终头、中间头及旧日志。不是 TLS 抓包，不含 HTTP 实现后加的 Host / HTTP/2 伪头。
+- 为避免携带主源码树其他 WIP，在 `.local/outbound-headers-build.q1VRY4/cli-node` 从 `feat/outbound-303@f996e88` 隔离导出，仅追加观察者；该基线已含尚未上线的 `84e6c16` 请求头补齐修复。新 ELF `/tmp/vm2api-final-outbound-headers-cli` SHA256 `2f65c444d651b0572baf5f72e81e6253720be0fe6e9f7313bbf38261a7f03425`，bun-linux-x64-baseline，0 missing modules。
+- CLI 观察者单测 2/2；Node 定向 96/96；面板来源显示测试 3/3；真实 Node → 现有 kernel ELF → 新 CLI ELF → 本地上游 5/5，通过日志值与上游实收头逐项比对，以及 296 三档对 `84e6c16` 的 body 字节回归。未与真实 Anthropic 账号联调，未替换交付模板、发布 payload、推送或修改线上槽位；收尾按两个仓库分别提交本次源码，不包含其他 WIP。
+
 ## 2026-10-23 — cli-node 请求头与交互 CLI 对齐（未部署）
 
 - `getUserAgent` 与 `officialCliUserAgent` 的出站入口固定为 `cli`；不改 `CLAUDE_CODE_ENTRYPOINT`，避免影响工具/运行模式开关，保留 agent-sdk、client-app 与 workload 后缀。
