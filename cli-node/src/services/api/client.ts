@@ -397,9 +397,9 @@ function buildFetch(fetchOverride: ClientOptions['fetch'], source: string | unde
       // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins
       const url = input instanceof Request ? input.url : String(input)
       const id = headers.get(CLIENT_REQUEST_ID_HEADER)
-      logForDebugging(
-        `[API REQUEST] ${new URL(url).pathname}${id ? ` ${CLIENT_REQUEST_ID_HEADER}=${id}` : ''} source=${source ?? 'unknown'}`,
-      )
+      const contentLength = headers.get('content-length')
+      const requestInfo = `[API REQUEST] ${new URL(url).pathname}${id ? ` ${CLIENT_REQUEST_ID_HEADER}=${id}` : ''} source=${source ?? 'unknown'}`
+      logForDebugging(contentLength ? `${requestInfo} content_length=${contentLength}` : requestInfo)
     } catch {
       // never let logging crash the fetch
     }
