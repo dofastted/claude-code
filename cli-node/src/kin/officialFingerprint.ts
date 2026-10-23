@@ -57,8 +57,8 @@ export type RequestClassContext = {
 }
 
 export function officialCliUserAgent(): string {
-  // Pin the wire identity without changing entrypoint-gated runtime behavior.
-  return `claude-cli/${officialCliVersion()} (external, cli)`
+  const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT || 'cli'
+  return `claude-cli/${officialCliVersion()} (external, ${entrypoint})`
 }
 
 /**

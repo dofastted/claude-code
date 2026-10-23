@@ -32,8 +32,8 @@ export function getUserAgent(): string {
   // so the read picks up the same setWorkload() value as getAttributionHeader.
   const workload = getWorkload()
   const workloadSuffix = workload ? `, workload/${workload}` : ''
-  // Pin only the wire identity; CLAUDE_CODE_ENTRYPOINT still controls runtime behavior.
-  return `claude-cli/${officialCliVersion()} (external, cli${agentSdkVersion}${clientApp}${workloadSuffix})`
+  const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT || 'cli'
+  return `claude-cli/${officialCliVersion()} (external, ${entrypoint}${agentSdkVersion}${clientApp}${workloadSuffix})`
 }
 
 export function getMCPUserAgent(): string {

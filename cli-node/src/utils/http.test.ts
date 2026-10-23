@@ -47,7 +47,7 @@ test('getUserAgent pins external cli while preserving SDK client suffixes', () =
     },
     () => {
       expect(getUserAgent()).toMatch(
-        /^claude-cli\/2\.1\.296 \(external, cli, agent-sdk\/0\.2\.0, client-app\/acme\/1\)$/,
+        /^claude-cli\/2\.1\.296 \(external, sdk-cli, agent-sdk\/0\.2\.0, client-app\/acme\/1\)$/,
       )
     },
   )

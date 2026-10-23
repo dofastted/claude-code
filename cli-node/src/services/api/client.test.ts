@@ -86,7 +86,7 @@ test('API request headers describe the final UTF-8 body and accept compressed JS
     expect(events).toEqual(['message_stop'])
     expect(requests).toHaveLength(2)
     for (const { headers, raw } of requests) {
-      expect(headers['user-agent']).toBe('claude-cli/2.1.303 (external, cli)')
+      expect(headers['user-agent']).toBe('claude-cli/2.1.303 (external, sdk-cli)')
       expect(headers.accept).toBe('application/json, text/event-stream')
       expect(headers['accept-encoding']).toBe('gzip, br')
       expect(headers['x-stainless-timeout']).toBe('600')

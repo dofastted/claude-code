@@ -21,7 +21,7 @@ test('officialCliUserAgent is claude-cli not bun or axios', () => {
   process.env.CLAUDE_CODE_ENTRYPOINT = 'sdk-cli'
   try {
     const ua = officialCliUserAgent()
-    expect(ua).toMatch(/^claude-cli\/2\.1\.296 \(external, cli\)$/)
+    expect(ua).toMatch(/^claude-cli\/2\.1\.296 \(external, sdk-cli\)$/)
     expect(ua).not.toContain('Bun/')
     expect(ua).not.toContain('axios/')
   } finally {
@@ -97,7 +97,7 @@ test('officialCliUserAgent ignores USER_TYPE', () => {
   process.env.USER_TYPE = 'ant'
   process.env.CLAUDE_CODE_ENTRYPOINT = 'sdk-cli'
   try {
-    expect(officialCliUserAgent()).toMatch(/^claude-cli\/2\.1\.296 \(external, cli\)$/)
+    expect(officialCliUserAgent()).toMatch(/^claude-cli\/2\.1\.296 \(external, sdk-cli\)$/)
   } finally {
     if (prevUser == null) delete process.env.USER_TYPE
     else process.env.USER_TYPE = prevUser
