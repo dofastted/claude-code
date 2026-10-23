@@ -3,7 +3,7 @@
  * Seed and the four lane constants are the movabs immediates in the linux-x64
  * The SDK may pretty-print JSON; the sealer compacts it before applying the
  * official compact-JSON scanner, then sends that compact body. The hash input:
- *   1. resets the first cch= value to 00000
+ *   1. resets only the canonical system billing cch to 00000
  *   2. clears every string-valued model
  *   3. removes fallbacks, fallback_credit_token, and max_tokens digits
  * The compact body is sent without the SDK's stale Content-Length header.
@@ -175,14 +175,17 @@ function skipMaxTokens(s: string): string {
 function setSystemCch(body: unknown, value: string): boolean {
   if (!body || typeof body !== 'object' || !('system' in body)) return false
   let found = false
-  const rewrite = (text: string) =>
-    text.replace(
-      /(^\s*x-anthropic-billing-header:[^\r\n]*?\bcch=)[0-9a-f]{5}(?=;)/im,
+  const rewrite = (text: string) => {
+    // Later blocks and embedded example lines are caller content, not billing.
+    if (found) return text
+    return text.replace(
+      /(^\s*x-anthropic-billing-header:[^\r\n]*?\bcch=)[0-9a-f]{5}(?=;)/i,
       (_match, prefix: string) => {
         found = true
         return `${prefix}${value}`
       },
     )
+  }
   if (typeof body.system === 'string') body.system = rewrite(body.system)
   else if (Array.isArray(body.system)) {
     for (const block of body.system) {
