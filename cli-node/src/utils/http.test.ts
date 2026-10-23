@@ -24,7 +24,7 @@ function withUaEnv(env: Record<string, string | undefined>, run: () => void) {
   }
 }
 
-test('getUserAgent hardcodes external even when USER_TYPE is unset or ant', () => {
+test('getUserAgent pins external cli while preserving SDK client suffixes', () => {
   withUaEnv(
     {
       USER_TYPE: undefined,
@@ -46,8 +46,8 @@ test('getUserAgent hardcodes external even when USER_TYPE is unset or ant', () =
       CLAUDE_AGENT_SDK_CLIENT_APP: 'acme/1',
     },
     () => {
-      expect(getUserAgent()).toBe(
-        'claude-cli/2.1.296 (external, sdk-cli, agent-sdk/0.2.0, client-app/acme/1)',
+      expect(getUserAgent()).toMatch(
+        /^claude-cli\/2\.1\.296 \(external, cli, agent-sdk\/0\.2\.0, client-app\/acme\/1\)$/,
       )
     },
   )

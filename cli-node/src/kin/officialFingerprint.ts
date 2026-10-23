@@ -57,9 +57,8 @@ export type RequestClassContext = {
 }
 
 export function officialCliUserAgent(): string {
-  const entry = process.env.CLAUDE_CODE_ENTRYPOINT || 'sdk-cli'
-  // Official jH hardcodes external. USER_TYPE is not a UA classifier.
-  return `claude-cli/${officialCliVersion()} (external, ${entry})`
+  // Pin the wire identity without changing entrypoint-gated runtime behavior.
+  return `claude-cli/${officialCliVersion()} (external, cli)`
 }
 
 /**
@@ -190,6 +189,8 @@ export function applyOfficialOutboundHeaders(
   if (!currentUa || /Bun\//.test(currentUa) || /axios\//i.test(currentUa)) {
     headers.set('User-Agent', userAgent)
   }
+  headers.set('accept', 'application/json, text/event-stream')
+  headers.set('accept-encoding', 'gzip, br')
   if (!headers.has('x-app')) {
     headers.set('x-app', claudeCodeAppHeader())
   }

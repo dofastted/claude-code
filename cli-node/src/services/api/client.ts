@@ -102,9 +102,12 @@ export async function getAnthropicClient({
   const remoteSessionId = process.env.CLAUDE_CODE_REMOTE_SESSION_ID
   const clientApp = process.env.CLAUDE_AGENT_SDK_CLIENT_APP
   const customHeaders = getCustomHeaders()
+  const timeout = parseInt(process.env.API_TIMEOUT_MS || String(600 * 1000), 10)
   const defaultHeaders: { [key: string]: string } = {
     'User-Agent': getUserAgent(),
     'X-Claude-Code-Session-Id': getSessionId(),
+    // SDK 0.39 reports milliseconds; the official wire header uses seconds.
+    'x-stainless-timeout': String(Math.trunc(timeout / 1000)),
     ...claudeCodeIdentityHeaders({
       source,
       requestClass,
@@ -141,7 +144,7 @@ export async function getAnthropicClient({
   const ARGS = {
     defaultHeaders,
     maxRetries,
-    timeout: parseInt(process.env.API_TIMEOUT_MS || String(600 * 1000), 10),
+    timeout,
     dangerouslyAllowBrowser: true,
     fetchOptions: getProxyFetchOptions({
       forAnthropicAPI: true,
@@ -371,9 +374,11 @@ function buildFetch(fetchOverride: ClientOptions['fetch'], source: string | unde
       const stamped = stampCchBody(wire, readPanelCchEnabled())
       if (stamped !== text) {
         body = typeof body === 'string' ? stamped : new TextEncoder().encode(stamped)
-        headers.delete('content-length')
       }
     }
+    // CCH sealing can change serialization. Length describes the final request bytes, not JS characters.
+    if (typeof body === 'string') headers.set('content-length', String(Buffer.byteLength(body, 'utf8')))
+    else if (body instanceof Uint8Array) headers.set('content-length', String(body.byteLength))
     if (typeof body === 'string') {
       const match = body.match(/\bcch=([0-9a-f]{5})\b/i)
       if (match?.[1]) {

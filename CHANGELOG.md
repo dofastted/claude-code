@@ -2,6 +2,12 @@
 
 记录本地源码、构建和明确标注的部署结果；未标注上线的记录不代表已发布、已部署或已同步到运行中的槽位。
 
+## 2026-10-23 — cli-node 请求头与交互 CLI 对齐（未部署）
+
+- `getUserAgent` 与 `officialCliUserAgent` 的出站入口固定为 `cli`；不改 `CLAUDE_CODE_ENTRYPOINT`，避免影响工具/运行模式开关，保留 agent-sdk、client-app 与 workload 后缀。
+- SDK fetch 统一发送 `Accept: application/json, text/event-stream`、`Accept-Encoding: gzip, br`；客户端的毫秒 timeout 转成秒头，保留自定义头覆盖。最终字符串 / 字节请求体在 CCH 完成后计算 `Content-Length`，不提前计算 envelope 长度，不向 SSE 响应填假长度。
+- 真实本地 HTTP + SDK 回归覆盖多字节正文、最终 CCH/长度与 gzip JSON / Brotli SSE 解压；不根据 API-key 样本删减 OAuth/能力 beta。当前生产不自动切换，需后续部署新 CLI 才会生效。
+
 ## 2026-10-18 — 协议页集中设置与 CCH 关闭固定五零（未发布）
 
 - 按用户最新要求，原生 sticky 空闲超时从账号池移到设置 → 协议，与 CCH 开关集中；保存 / 放弃 / 刷新与 kernel.json 热投影保持。关闭 CCH 不再移除参数，固定发送 `cch=00000;`（5 个 0），仅开启时计算真实摘要。
