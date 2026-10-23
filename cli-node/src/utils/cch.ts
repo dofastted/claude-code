@@ -177,14 +177,24 @@ function setSystemCch(body: unknown, value: string): boolean {
   let found = false
   const rewrite = (text: string) => {
     // Later blocks and embedded example lines are caller content, not billing.
-    if (found) return text
-    return text.replace(
-      /(^\s*x-anthropic-billing-header:[^\r\n]*?\bcch=)[0-9a-f]{5}(?=;)/i,
-      (_match, prefix: string) => {
-        found = true
-        return `${prefix}${value}`
-      },
-    )
+    if (found || !/^\s*x-anthropic-billing-header:/i.test(text)) return text
+    found = true
+    const match = text.match(/^(\s*x-anthropic-billing-header:[^\r\n]*)(\r?\n|$)/i)
+    if (!match) return text
+    let line = match[1]!.replace(/\bcc_entrypoint=[^;\s]*/i, 'cc_entrypoint=sdk-cli')
+    if (!/\bcc_entrypoint=/i.test(line)) {
+      const cchIndex = line.search(/\s*cch=/i)
+      if (cchIndex >= 0) line = `${line.slice(0, cchIndex)} cc_entrypoint=sdk-cli;${line.slice(cchIndex)}`
+      else line = `${line.trimEnd()}${line.trimEnd().endsWith(';') ? '' : ';'} cc_entrypoint=sdk-cli;`
+    }
+    let cchFound = false
+    line = line.replace(/\s*cch=[^;\s]*;?/gi, () => {
+      if (cchFound) return ''
+      cchFound = true
+      return ` cch=${value};`
+    })
+    if (!cchFound) line = `${line.trimEnd()}${line.trimEnd().endsWith(';') ? '' : ';'} cch=${value};`
+    return `${line}${match[2]}${text.slice(match[0].length)}`
   }
   if (typeof body.system === 'string') body.system = rewrite(body.system)
   else if (Array.isArray(body.system)) {
@@ -218,7 +228,6 @@ export function computeCch(body: string): string {
 
 /** Seal billing CCH. Enabled requests rewrite any five-hex digest, not only the placeholder. */
 export function stampCchBody(body: string, enabled = true): string {
-  if (!enabled) return body
   let parsed: unknown
   try {
     parsed = JSON.parse(body)
@@ -226,6 +235,7 @@ export function stampCchBody(body: string, enabled = true): string {
     return body
   }
   if (!setSystemCch(parsed, '00000')) return body
+  if (!enabled) return JSON.stringify(parsed)
   setSystemCch(parsed, computeCch(JSON.stringify(parsed)))
   return JSON.stringify(parsed)
 }
