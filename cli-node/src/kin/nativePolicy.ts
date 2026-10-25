@@ -3,6 +3,7 @@ type NativeBody = {
   thinking?: unknown
   tools?: unknown
   tool_choice?: unknown
+  output_config?: unknown
 }
 
 const COMPUTER_FROM = 'computer_20251124'
@@ -36,7 +37,11 @@ export function applyNativeModelPolicy(body: NativeBody): void {
   if (/^claude-haiku-5(?:-5|\.5)(?=-|$)/i.test(model)) {
     const type = thinking && 'type' in thinking ? String(thinking.type || '').toLowerCase() : ''
     const legacy = thinking && 'budget_tokens' in thinking && thinking.budget_tokens != null
-    if (thinking && (type === 'enabled' || legacy)) body.thinking = adaptiveThinking(thinking)
+    const effort = body.output_config && typeof body.output_config === 'object' && 'effort' in body.output_config
+      ? String(body.output_config.effort || '').toLowerCase()
+      : ''
+    const blocked = type === 'disabled' && (effort === 'xhigh' || effort === 'max')
+    if (thinking && (type === 'enabled' || legacy || blocked)) body.thinking = adaptiveThinking(thinking)
     return
   }
   if (!/^claude-opus-5(?:-5|\.5)(?=-|$)/i.test(model) && !/^claude-sonnet-5(?:-5|\.5)(?=-|$)/i.test(model)) return

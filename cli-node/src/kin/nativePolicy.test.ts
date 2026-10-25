@@ -55,6 +55,27 @@ test('legacy Haiku thinking is disabled and Haiku 5.5 stays explicit', async () 
   expect(current?.thinking).toEqual({ type: 'adaptive' })
 })
 
+test('Haiku 5.5 keeps disabled thinking unless effort is xhigh or max', async () => {
+  const high = await capture({
+    model: 'claude-haiku-5-5',
+    thinking: { type: 'disabled', display: 'summarized' },
+    output_config: { effort: 'high' },
+  })
+  expect(high?.thinking).toEqual({ type: 'disabled', display: 'summarized' })
+  const blocked = await capture({
+    model: 'claude-haiku-5-5',
+    thinking: { type: 'disabled', display: 'summarized' },
+    output_config: { effort: 'xhigh' },
+  })
+  expect(blocked?.thinking).toEqual({ type: 'adaptive', display: 'summarized' })
+  const max = await capture({
+    model: 'claude-haiku-5-5',
+    thinking: { type: 'disabled' },
+    output_config: { effort: 'max' },
+  })
+  expect(max?.thinking).toEqual({ type: 'adaptive' })
+})
+
 test('Opus and Sonnet 5.5 rewrite legacy thinking and forced tool choice', async () => {
   const body = await capture({
     model: 'claude-opus-5-5',
