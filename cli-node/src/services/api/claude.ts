@@ -36,13 +36,11 @@ import {
   resolveTurnOrigin,
 } from '../../constants/system.js'
 import {
-  explicitCacheTtl,
   readPanelCachedMicrocompactEnabled,
-  readPanelCacheTtl,
 } from '../../kin/cacheTtl.js'
 import { mergeOfficialExtraBetas } from '../../kin/officialBetas.js'
 import { assembleMessageRequest } from './requestBody.js'
-import { assembleOfficialPromptBody } from '../../../../../src/lib/protocol/anthropic-messages.mjs'
+
 import { assembleApiMetadata } from '../../kin/officialFingerprint.js'
 import {
   setupTokenBetaHeader,
@@ -55,7 +53,6 @@ import {
   layoutSystemBlocks,
   leftoverFromSystemPrompt,
   preserveOfficialSystem,
-  wireSystemBlocks,
 } from '../../kin/systemLayout.js'
 import {
   getEmptyToolPermissionContext,
@@ -1615,8 +1612,8 @@ async function* queryModel(
 
   const enablePromptCaching =
     options.enablePromptCaching ?? getPromptCachingEnabled(options.model)
-  const forwardedWireSystem =
-    kinQuery && !options.requestContext ? wireSystemBlocks(options.wireSystem) : null
+  // A native array is caller text, not the official four-block layout.
+  // wireSystemBlocks would forward its markers unchanged and skip the split.
   const system = options.requestContext
     ? classifierSystemBlocks(
         options.wireSystem,
@@ -1631,8 +1628,7 @@ async function* queryModel(
           turnOrigin: resolveTurnOrigin(options.querySource),
         }),
       )
-    : forwardedWireSystem ??
-      buildSystemPromptBlocks(systemPrompt, enablePromptCaching, {
+    : buildSystemPromptBlocks(systemPrompt, enablePromptCaching, {
         skipGlobalCacheForSystemPrompt: needsToolBasedCacheMarker,
         querySource: options.querySource,
       })
@@ -2075,12 +2071,7 @@ async function* queryModel(
         ...(thinkingConfig.display ? { display: thinkingConfig.display } : {}),
       }
     }
-    if (isKinQuerySource(options.querySource) && !options.requestContext) {
-      // The gateway's user marker carries the selected panel TTL. Template
-      // markers and SDK extra-body merges must not override that policy.
-      const ttl = explicitCacheTtl([apiMessages]) ?? readPanelCacheTtl() ?? '1h'
-      params = assembleOfficialPromptBody(params, { ttl, preserveMessageMarker: true }) as typeof params
-    }
+
     const gatedBetas = withRequestProtocolBetas(requestBetas, params)
     params.betas =
       isKinQuerySource(options.querySource) && !inferenceOnly
