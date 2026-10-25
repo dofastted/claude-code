@@ -254,7 +254,7 @@ export function getAttributionHeader(fingerprint: string, opts: AttributionOptio
     opts.projectId &&
     PROJECT_ID.test(opts.projectId) &&
     opts.projectSource &&
-    PROJECT_SOURCES[opts.projectSource]
+    Object.hasOwn(PROJECT_SOURCES, opts.projectSource)
   ) {
     project = ` cc_project=${opts.projectId}; cc_project_src=${opts.projectSource};`
   }

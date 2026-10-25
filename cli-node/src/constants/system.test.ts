@@ -68,6 +68,19 @@ test('303 billing omits gateway and project when excluded', () => {
   expect(header).not.toContain('cc_project')
 })
 
+test('303 billing rejects inherited project source names', () => {
+  delete process.env.ANTHROPIC_BASE_URL
+  for (const projectSource of ['constructor', 'toString']) {
+    const header = getAttributionHeader('958', {
+      includeSubscriberFields: true,
+      projectId: PROJECT,
+      projectSource,
+    })
+    expect(header).not.toContain('cc_project')
+    expect(header).not.toContain('cc_project_src')
+  }
+})
+
 test('303 billing opt-out drops the whole line', () => {
   const previous = process.env.CLAUDE_CODE_ATTRIBUTION_HEADER
   process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = 'off'
