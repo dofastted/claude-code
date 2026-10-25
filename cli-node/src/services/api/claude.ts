@@ -1894,15 +1894,20 @@ async function* queryModel(
 
     // Kin forwards the caller thinking config. Other queries, including real
     // subagents, keep the adaptive-vs-budget selection below.
-    if (options.honorCallerThinking && options.wireBody) {
-      options.wireBody.thinking = options.wireThinking
-      options.wireBody.tools = allTools
-      options.wireBody.tool_choice = options.toolChoice
+    if (options.honorCallerThinking && options.wireBody && options.requestContext) {
+      thinking = options.wireThinking as BetaMessageStreamParams['thinking']
+    } else if (options.honorCallerThinking && options.wireBody) {
+      const hadThinking = Object.hasOwn(options.wireBody, 'thinking')
+      const hadTools = Object.hasOwn(options.wireBody, 'tools')
+      const hadChoice = Object.hasOwn(options.wireBody, 'tool_choice')
+      if (hadThinking) options.wireBody.thinking = options.wireThinking
+      if (hadTools) options.wireBody.tools = allTools
+      if (hadChoice) options.wireBody.tool_choice = options.toolChoice
       applyNativeModelPolicy(options.wireBody)
-      options.wireThinking = options.wireBody.thinking
-      options.toolChoice = options.wireBody.tool_choice as typeof options.toolChoice
-      allTools.splice(0, allTools.length, ...((options.wireBody.tools as BetaToolUnion[]) || []))
-      if (!outputConfig.effort && !options.requestContext) outputConfig.effort = 'medium'
+      if (hadThinking) options.wireThinking = options.wireBody.thinking
+      if (hadChoice) options.toolChoice = options.wireBody.tool_choice as typeof options.toolChoice
+      if (hadTools) allTools.splice(0, allTools.length, ...((options.wireBody.tools as BetaToolUnion[]) || []))
+      if (!outputConfig.effort) outputConfig.effort = 'medium'
       thinking = options.wireThinking as BetaMessageStreamParams['thinking']
     } else if (hasThinking && modelSupportsThinking(options.model)) {
       let useAdaptive = modelSupportsAdaptiveThinking(options.model)

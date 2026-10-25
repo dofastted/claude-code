@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { assembledRequest, queryKinMessagesWithStreaming } from '../services/api/claude.ts'
 import { createUserMessage } from '../utils/messages.ts'
 
-async function capture(wire: Record<string, unknown>) {
+async function capture(wire: Record<string, unknown>, extra: Record<string, unknown> = {}) {
   let captured: Record<string, unknown> | undefined
   assembledRequest.current = (params) => {
     captured = params
@@ -12,6 +12,7 @@ async function capture(wire: Record<string, unknown>) {
   process.env.ANTHROPIC_BASE_URL = 'http://127.0.0.1:9'
   process.env.CLAUDE_CODE_SKIP_VCR = '1'
   process.env.ANTHROPIC_API_KEY = 'test-key'
+  const original = structuredClone(wire)
   try {
     const stream = queryKinMessagesWithStreaming({
       system: ['caller'],
@@ -23,13 +24,14 @@ async function capture(wire: Record<string, unknown>) {
       wireSystem: [{ type: 'text', text: 'caller' }],
       wireMessages: [{ role: 'user', content: 'hello' }],
       wireBody: wire,
-      wireThinking: wire.thinking,
+      wireThinking: Object.hasOwn(original, 'thinking') ? original.thinking : undefined,
       toolChoice: wire.tool_choice as { type: 'auto' } | undefined,
       outputConfig: wire.output_config as Record<string, unknown> | undefined,
       contextManagement: wire.context_management,
       temperature: typeof wire.temperature === 'number' ? wire.temperature : undefined,
       toolSchemas: Array.isArray(wire.tools) ? wire.tools as [] : [],
       topK: typeof wire.top_k === 'number' ? wire.top_k : undefined,
+      ...extra,
     })
     for await (const _event of stream) {
       // The observer throws before the request leaves the process.
@@ -95,4 +97,26 @@ test('omitted native sampling fields stay omitted', async () => {
   expect(Object.hasOwn(body || {}, 'top_p')).toBe(false)
   expect(Object.hasOwn(body || {}, 'top_k')).toBe(false)
   expect(Object.hasOwn(body || {}, 'context_management')).toBe(false)
+})
+
+test('classifier requests skip ordinary model policy', async () => {
+  const body = await capture(
+    { model: 'claude-3-5-haiku-latest', thinking: { type: 'enabled', budget_tokens: 2048 } },
+    { requestContext: { purpose: 'auto_mode_classifier', format: 'xml' } },
+  )
+  expect(body?.thinking).toEqual({ type: 'enabled', budget_tokens: 2048 })
+})
+
+test('omitted native thinking stays adaptive', async () => {
+  const plain = await capture({ model: 'claude-sonnet-4-5' })
+  expect(plain?.thinking).toEqual({ type: 'adaptive' })
+})
+
+test('thread continuation keeps omitted tools and thinking omitted', async () => {
+  const thread = await capture({
+    model: 'claude-sonnet-4-5',
+    thread: { type: 'continue', previous_message_id: 'msg_prior' },
+  })
+  expect(Object.hasOwn(thread || {}, 'tools')).toBe(false)
+  expect(Object.hasOwn(thread || {}, 'thinking')).toBe(false)
 })
