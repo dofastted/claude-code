@@ -85,7 +85,7 @@ const result = await Bun.build({
   splitting: false,
   sourcemap: 'none',
   define: {
-    'MACRO.VERSION': JSON.stringify('2.1.296'),
+    'MACRO.VERSION': JSON.stringify('2.1.303'),
     'MACRO.BUILD_TIME': JSON.stringify('2026-09-28T02:26:10Z'),
     'MACRO.PACKAGE_URL': JSON.stringify('@anthropic-ai/claude-code'),
     'MACRO.NATIVE_PACKAGE_URL': JSON.stringify(''),
