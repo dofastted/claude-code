@@ -617,25 +617,13 @@ export async function computeEnvInfo(
   // DCE: `process.env.USER_TYPE === 'ant'` is build-time --define. It MUST be
   // inlined at each callsite (not hoisted to a const) so the bundler can
   // constant-fold it to `false` in external builds and eliminate the branch.
-  let modelDescription = ''
-  if (process.env.USER_TYPE === 'ant' && isUndercover()) {
-    // suppress
-  } else {
-    const marketingName = getMarketingNameForModel(modelId)
-    modelDescription = marketingName
-      ? `You are powered by the model named ${marketingName}. The exact model ID is ${modelId}.`
-      : `You are powered by the model ${modelId}.`
-  }
+  const modelDescription =
+    process.env.USER_TYPE === 'ant' && isUndercover() ? '' : officialModelSentence(modelId)
 
   const additionalDirsInfo =
     additionalWorkingDirectories && additionalWorkingDirectories.length > 0
       ? `Additional working directories: ${additionalWorkingDirectories.join(', ')}\n`
       : ''
-
-  const cutoff = getKnowledgeCutoff(modelId)
-  const knowledgeCutoffMessage = cutoff
-    ? `\n\nAssistant knowledge cutoff is ${cutoff}.`
-    : ''
 
   return `Here is useful information about the environment you are running in:
 <env>
@@ -645,7 +633,7 @@ ${additionalDirsInfo}Platform: ${env.platform}
 ${getShellInfoLine()}
 OS Version: ${unameSR}
 </env>
-${modelDescription}${knowledgeCutoffMessage}`
+${modelDescription}`
 }
 
 export async function computeSimpleEnvInfo(
@@ -656,20 +644,8 @@ export async function computeSimpleEnvInfo(
 
   // Undercover: strip all model name/ID references. See computeEnvInfo.
   // DCE: inline the USER_TYPE check at each site — do NOT hoist to a const.
-  let modelDescription: string | null = null
-  if (process.env.USER_TYPE === 'ant' && isUndercover()) {
-    // suppress
-  } else {
-    const marketingName = getMarketingNameForModel(modelId)
-    modelDescription = marketingName
-      ? `You are powered by the model named ${marketingName}. The exact model ID is ${modelId}.`
-      : `You are powered by the model ${modelId}.`
-  }
-
-  const cutoff = getKnowledgeCutoff(modelId)
-  const knowledgeCutoffMessage = cutoff
-    ? `Assistant knowledge cutoff is ${cutoff}.`
-    : null
+  const modelDescription =
+    process.env.USER_TYPE === 'ant' && isUndercover() ? null : officialModelSentence(modelId)
 
   const cwd = getCwd()
   const isWorktree = getCurrentWorktreeSession() !== null
@@ -690,7 +666,6 @@ export async function computeSimpleEnvInfo(
     getShellInfoLine(),
     `OS Version: ${unameSR}`,
     modelDescription,
-    knowledgeCutoffMessage,
     process.env.USER_TYPE === 'ant' && isUndercover()
       ? null
       : `The most recent Claude model family is Claude 4.5/4.6. Model IDs — Opus 4.6: '${CLAUDE_4_5_OR_4_6_MODEL_IDS.opus}', Sonnet 4.6: '${CLAUDE_4_5_OR_4_6_MODEL_IDS.sonnet}', Haiku 4.5: '${CLAUDE_4_5_OR_4_6_MODEL_IDS.haiku}'. When building AI applications, default to the latest and most capable Claude models.`,
@@ -709,24 +684,46 @@ export async function computeSimpleEnvInfo(
   ].join(`\n`)
 }
 
+function officialModelSentence(modelId: string): string {
+  const marketingName = getMarketingNameForModel(modelId)
+  if (!marketingName) return `You are powered by the model ${modelId}.`
+  const cutoff = getKnowledgeCutoff(modelId)
+  const cutoffText = cutoff ? ` Assistant knowledge cutoff is ${cutoff}.` : ''
+  return `You are powered by the model named ${marketingName}. The exact model ID is ${modelId}.${cutoffText}`
+}
+
 // @[MODEL LAUNCH]: Add a knowledge cutoff date for the new model.
 function getKnowledgeCutoff(modelId: string): string | null {
   const canonical = getCanonicalName(modelId)
-  if (canonical.includes('claude-sonnet-5-5')) {
+  if (
+    canonical.includes('claude-sonnet-5-5') ||
+    canonical.includes('claude-haiku-5-5') ||
+    canonical.includes('claude-opus-5-5') ||
+    canonical.includes('claude-fable-5-1')
+  ) {
     return 'June 2026'
-  } else if (canonical.includes('claude-sonnet-5')) {
+  }
+  if (canonical.includes('claude-opus-5')) return 'May 2026'
+  if (
+    canonical.includes('claude-sonnet-5') ||
+    canonical.includes('claude-opus-4-8') ||
+    canonical.includes('claude-opus-4-7') ||
+    canonical.includes('claude-fable-5')
+  ) {
     return 'January 2026'
-  } else if (canonical.includes('claude-sonnet-4-6')) {
-    return 'August 2025'
-  } else if (canonical.includes('claude-opus-4-6')) {
+  }
+  if (canonical.includes('claude-sonnet-4-6')) return 'August 2025'
+  if (canonical.includes('claude-opus-4-6') || canonical.includes('claude-opus-4-5')) {
     return 'May 2025'
-  } else if (canonical.includes('claude-opus-4-5')) {
-    return 'May 2025'
-  } else if (canonical.includes('claude-haiku-4')) {
+  }
+  if (canonical.includes('claude-haiku-4') || canonical.includes('claude-3-5-haiku')) {
     return 'February 2025'
-  } else if (
+  }
+  if (
     canonical.includes('claude-opus-4') ||
-    canonical.includes('claude-sonnet-4')
+    canonical.includes('claude-sonnet-4') ||
+    canonical.includes('claude-3-7-sonnet') ||
+    canonical.includes('claude-3-5-sonnet')
   ) {
     return 'January 2025'
   }
