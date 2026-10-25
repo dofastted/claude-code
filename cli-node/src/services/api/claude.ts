@@ -47,6 +47,7 @@ import {
 } from '../../kin/cacheTtl.js'
 import { mergeOfficialExtraBetas } from '../../kin/officialBetas.js'
 import { assembleMessageRequest } from './requestBody.js'
+import { applyNativeModelPolicy } from '../../kin/nativePolicy.js'
 
 import { assembleApiMetadata } from '../../kin/officialFingerprint.js'
 import {
@@ -1671,6 +1672,7 @@ async function* queryModel(
   }
   const allTools = [...toolSchemas, ...extraToolSchemas]
 
+
   const isFastMode =
     isFastModeEnabled() &&
     isFastModeAvailable() &&
@@ -1892,10 +1894,15 @@ async function* queryModel(
 
     // Kin forwards the caller thinking config. Other queries, including real
     // subagents, keep the adaptive-vs-budget selection below.
-    if (options.honorCallerThinking) {
-      // Native jobs already passed model policy in Node. Preserve every wire
-      // thinking field (including display/binding controls), rather than
-      // rebuilding a subset or disabling all Haiku models.
+    if (options.honorCallerThinking && options.wireBody) {
+      options.wireBody.thinking = options.wireThinking
+      options.wireBody.tools = allTools
+      options.wireBody.tool_choice = options.toolChoice
+      applyNativeModelPolicy(options.wireBody)
+      options.wireThinking = options.wireBody.thinking
+      options.toolChoice = options.wireBody.tool_choice as typeof options.toolChoice
+      allTools.splice(0, allTools.length, ...((options.wireBody.tools as BetaToolUnion[]) || []))
+      if (!outputConfig.effort && !options.requestContext) outputConfig.effort = 'medium'
       thinking = options.wireThinking as BetaMessageStreamParams['thinking']
     } else if (hasThinking && modelSupportsThinking(options.model)) {
       let useAdaptive = modelSupportsAdaptiveThinking(options.model)
@@ -2068,7 +2075,7 @@ async function* queryModel(
       messages: apiMessages,
       system,
       tools: allTools,
-      tool_choice: toolChoice,
+      tool_choice: options.toolChoice,
       betas: requestBetas,
       metadata:
         options.wireBody?.metadata &&
