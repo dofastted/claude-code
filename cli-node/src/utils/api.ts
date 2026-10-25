@@ -91,6 +91,8 @@ export type ClassifiedSystemPrompt = {
 export type SystemPromptBlock = {
   text: string
   cacheScope: CacheScope | null
+  /** Official system breakpoints are 1h. Message markers do not use this. */
+  ttl?: '1h'
 }
 
 // Fields to filter from tool schemas when swarms are not enabled
@@ -304,21 +306,13 @@ export function logAPIPrefix(systemPrompt: SystemPrompt): void {
 }
 
 /**
- * Split system prompt blocks the way official 2.1.303 `--print` does.
+ * Official `--print` system is four blocks:
+ * billing, identity, harness, guidance.
  *
- * 1. Global cache on, but tool-based cache (`skipGlobalCacheForSystemPrompt`,
- *    and only when the boundary marker itself is absent):
- *    billing unmarked, identity `1h` + `global`, reporting unmarked (only when
- *    billing and identity exist), everything else joined as `org`.
- * 2. Global cache on and the boundary marker is present:
- *    billing unmarked, identity `1h` + `global`, reporting unmarked, pre-boundary
- *    remainder joined as `1h` + `global`, post-boundary remainder joined as `org`.
- * 3. Gate off, or gate on but the marker is missing:
- *    billing unmarked, identity `1h` + `global`, reporting unmarked, everything
- *    else joined as `org`.
- *
- * The boundary marker never enters the body. Reporting is the exact
- * `# Reporting outcomes` block, not a substring of another section.
+ * billing and identity are unmarked. The harness (everything before the
+ * dynamic boundary, including reporting) is `1h` + `global`. Guidance
+ * (everything after the boundary) is `1h`. The boundary marker itself never
+ * enters the body. Without a boundary, the remainder is one `1h` block.
  */
 export function splitSysPromptPrefix(
   systemPrompt: SystemPrompt,
@@ -332,7 +326,6 @@ export function splitSysPromptPrefix(
   const classify = (blocks: readonly string[]): ClassifiedSystemPrompt => {
     let attributionHeader: string | undefined
     let systemPromptPrefix: string | undefined
-    let reporting: string | undefined
     const before: string[] = []
     const after: string[] = []
     blocks.forEach((block, index) => {
@@ -341,8 +334,6 @@ export function splitSysPromptPrefix(
         attributionHeader = block
       } else if (CLI_SYSPROMPT_PREFIXES.has(block)) {
         systemPromptPrefix = block
-      } else if (block === SYSTEM_PROMPT_REPORTING_OUTCOMES) {
-        reporting = block
       } else if (boundaryIndex !== -1 && index < boundaryIndex) {
         before.push(block)
       } else if (boundaryIndex !== -1) {
@@ -351,7 +342,7 @@ export function splitSysPromptPrefix(
         before.push(block)
       }
     })
-    return { attributionHeader, systemPromptPrefix, reporting, before, after }
+    return { attributionHeader, systemPromptPrefix, reporting: undefined, before, after }
   }
 
   const pushOwned = (
@@ -362,11 +353,7 @@ export function splitSysPromptPrefix(
       result.push({ text: parts.attributionHeader, cacheScope: null })
     }
     if (parts.systemPromptPrefix) {
-      // Official short request marks the identity block, not only the static body.
-      result.push({ text: parts.systemPromptPrefix, cacheScope: 'global' })
-    }
-    if (parts.reporting && parts.attributionHeader && parts.systemPromptPrefix) {
-      result.push({ text: parts.reporting, cacheScope: null })
+      result.push({ text: parts.systemPromptPrefix, cacheScope: null })
     }
   }
 
@@ -386,14 +373,14 @@ export function splitSysPromptPrefix(
     return result
   }
 
-  if (useGlobalCacheFeature && boundaryIndex !== -1) {
+  if (boundaryIndex !== -1) {
     const parts = classify(systemPrompt)
     const result: SystemPromptBlock[] = []
     pushOwned(result, parts)
     const staticJoined = parts.before.join('\n\n')
-    if (staticJoined) result.push({ text: staticJoined, cacheScope: 'global' })
+    if (staticJoined) result.push({ text: staticJoined, cacheScope: 'global', ttl: '1h' })
     const dynamicJoined = parts.after.join('\n\n')
-    if (dynamicJoined) result.push({ text: dynamicJoined, cacheScope: 'org' })
+    if (dynamicJoined) result.push({ text: dynamicJoined, cacheScope: 'org', ttl: '1h' })
     logEvent('tengu_sysprompt_boundary_found', {
       blockCount: result.length,
       staticBlockLength: staticJoined.length,
@@ -412,7 +399,7 @@ export function splitSysPromptPrefix(
   const result: SystemPromptBlock[] = []
   pushOwned(result, parts)
   const restJoined = [...parts.before, ...parts.after].join('\n\n')
-  if (restJoined) result.push({ text: restJoined, cacheScope: 'org' })
+  if (restJoined) result.push({ text: restJoined, cacheScope: 'org', ttl: '1h' })
   return result
 }
 

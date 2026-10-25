@@ -403,17 +403,17 @@ export function getPromptCachingEnabled(model: string): boolean {
 export function getCacheControl({
   scope,
   querySource,
+  ttl,
 }: {
   scope?: CacheScope
   querySource?: QuerySource
+  ttl?: '1h'
 } = {}): {
   type: 'ephemeral'
   ttl?: '1h'
   scope?: CacheScope
 } {
-  // Official --print marks system[2]/system[3] with 1h even for a mock token.
-  // Message markers stay on the subscriber allowlist.
-  const oneHour = scope === 'global' || should1hCacheTTL(querySource)
+  const oneHour = ttl === '1h' || should1hCacheTTL(querySource)
   return {
     type: 'ephemeral',
     ...(oneHour && { ttl: '1h' }),
@@ -3624,6 +3624,7 @@ export function buildSystemPromptBlocks(
         block.cacheScope !== null && {
           cache_control: getCacheControl({
             scope: block.cacheScope,
+            ttl: block.ttl,
             querySource: options?.querySource,
           }),
         }),
