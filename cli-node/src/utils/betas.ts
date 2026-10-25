@@ -21,7 +21,6 @@ import {
   TOOL_SEARCH_BETA_HEADER_3P,
   WEB_SEARCH_BETA_HEADER,
   THINKING_TOKEN_COUNT_BETA_HEADER,
-  MID_CONVERSATION_SYSTEM_BETA_HEADER,
 } from '../constants/betas.js'
 import { OAUTH_BETA_HEADER } from '../constants/oauth.js'
 import { isClaudeAISubscriber } from './auth.js'
@@ -240,8 +239,7 @@ export function shouldUseGlobalCacheScope(): boolean {
 export const getAllModelBetas = memoize((model: string): string[] => {
   const betaHeaders = []
   const canonicalName = getCanonicalName(model)
-  const isHaiku =
-    canonicalName.includes('haiku') && !canonicalName.includes('haiku-5')
+  const isHaiku = canonicalName.includes('haiku')
   const provider = getAPIProvider()
   const includeFirstPartyOnlyBetas = shouldIncludeFirstPartyOnlyBetas()
 
@@ -268,7 +266,7 @@ export const getAllModelBetas = memoize((model: string): string[] => {
   ) {
     betaHeaders.push(INTERLEAVED_THINKING_BETA_HEADER)
   }
-  if (includeFirstPartyOnlyBetas && !isHaiku) {
+  if (includeFirstPartyOnlyBetas) {
     betaHeaders.push(THINKING_TOKEN_COUNT_BETA_HEADER)
   }
 
@@ -366,11 +364,6 @@ export const getAllModelBetas = memoize((model: string): string[] => {
   if (includeFirstPartyOnlyBetas) {
     betaHeaders.push(PROMPT_CACHING_SCOPE_BETA_HEADER)
   }
-
-  if (includeFirstPartyOnlyBetas) {
-    betaHeaders.push(MID_CONVERSATION_SYSTEM_BETA_HEADER)
-  }
-
   // If ANTHROPIC_BETAS is set, split it by commas and add to betaHeaders.
   // This is an explicit user opt-in, so honor it regardless of model.
   if (process.env.ANTHROPIC_BETAS) {
@@ -415,21 +408,22 @@ export function getMergedBetas(
 ): string[] {
   const baseBetas = [...getModelBetas(model)]
 
-  // Agentic queries always need claude-code and cli-internal beta headers.
-  // For non-Haiku models these are already in baseBetas; for Haiku they're
-  // excluded by getAllModelBetas() since non-agentic Haiku calls don't need them.
-  if (options?.isAgenticQuery) {
-    if (!baseBetas.includes(CLAUDE_CODE_20250219_BETA_HEADER)) {
-      baseBetas.push(CLAUDE_CODE_20250219_BETA_HEADER)
-    }
-    if (
-      process.env.USER_TYPE === 'ant' &&
-      process.env.CLAUDE_CODE_ENTRYPOINT === 'cli' &&
-      CLI_INTERNAL_BETA_HEADER &&
-      !baseBetas.includes(CLI_INTERNAL_BETA_HEADER)
-    ) {
-      baseBetas.push(CLI_INTERNAL_BETA_HEADER)
-    }
+  // Agentic Haiku omits claude-code from NU, then FYn inserts it after the
+  // NU hits and before FU (per-turn-control and later).
+  if (options?.isAgenticQuery && !baseBetas.includes(CLAUDE_CODE_20250219_BETA_HEADER)) {
+    const insertAt = baseBetas.lastIndexOf(PROMPT_CACHING_SCOPE_BETA_HEADER)
+    const at = insertAt === -1 ? baseBetas.length : insertAt + 1
+    baseBetas.splice(at, 0, CLAUDE_CODE_20250219_BETA_HEADER)
+  }
+  if (
+    options?.isAgenticQuery &&
+    process.env.USER_TYPE === 'ant' &&
+    process.env.CLAUDE_CODE_ENTRYPOINT === 'cli' &&
+    CLI_INTERNAL_BETA_HEADER &&
+    !baseBetas.includes(CLI_INTERNAL_BETA_HEADER)
+  ) {
+    const codeAt = baseBetas.indexOf(CLAUDE_CODE_20250219_BETA_HEADER)
+    baseBetas.splice(codeAt === -1 ? baseBetas.length : codeAt + 1, 0, CLI_INTERNAL_BETA_HEADER)
   }
 
   const sdkBetas = getSdkBetas()
