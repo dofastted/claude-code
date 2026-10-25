@@ -1546,8 +1546,12 @@ async function* queryModel(
   const kinSystemLayout = getSystemLayout()
   const kinQuery = isKinQuerySource(options.querySource)
   const preservedOfficial = preserveOfficialSystem(systemPrompt)
+  const bounded = systemPrompt.some((block) => block.trim() === SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
+  const zeroBilling = kinSystemLayout === 'zero' && systemPrompt.some((block) => /prompt_version=</.test(block))
   if (preservedOfficial) {
     systemPrompt = asSystemPrompt(preservedOfficial)
+  } else if (bounded || zeroBilling) {
+    systemPrompt = asSystemPrompt(systemPrompt.filter((block) => block.trim()))
   } else if (kinQuery && options.requestContext) {
     // Classification has its own system contract, independent of panel layout.
     systemPrompt = asSystemPrompt(systemPrompt)
