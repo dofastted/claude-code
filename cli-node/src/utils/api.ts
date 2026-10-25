@@ -4,7 +4,10 @@ import type {
   BetaToolUnion,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import { createHash } from 'crypto'
-import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from 'src/constants/prompts.js'
+import {
+  SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+  SYSTEM_PROMPT_REPORTING_OUTCOMES,
+} from 'src/constants/prompts.js'
 import { getSystemContext, getUserContext } from 'src/context.js'
 import { isAnalyticsDisabled } from 'src/services/analytics/config.js'
 import {
@@ -78,6 +81,13 @@ type BetaToolWithExtras = BetaTool & {
 }
 
 export type CacheScope = 'global' | 'org'
+export type ClassifiedSystemPrompt = {
+  attributionHeader: string | undefined
+  systemPromptPrefix: string | undefined
+  reporting: string | undefined
+  before: string[]
+  after: string[]
+}
 export type SystemPromptBlock = {
   text: string
   cacheScope: CacheScope | null
@@ -294,142 +304,114 @@ export function logAPIPrefix(systemPrompt: SystemPrompt): void {
 }
 
 /**
- * Split system prompt blocks by content type for API matching and cache control.
- * See https://console.statsig.com/4aF3Ewatb6xPVpCwxb5nA3/dynamic_configs/claude_cli_system_prompt_prefixes
+ * Split system prompt blocks the way official 2.1.303 `--print` does.
  *
- * Behavior depends on feature flags and options:
+ * 1. Global cache on, but tool-based cache (`skipGlobalCacheForSystemPrompt`,
+ *    and only when the boundary marker itself is absent):
+ *    billing unmarked, identity `1h` + `global`, reporting unmarked (only when
+ *    billing and identity exist), everything else joined as `org`.
+ * 2. Global cache on and the boundary marker is present:
+ *    billing unmarked, identity `1h` + `global`, reporting unmarked, pre-boundary
+ *    remainder joined as `1h` + `global`, post-boundary remainder joined as `org`.
+ * 3. Gate off, or gate on but the marker is missing:
+ *    billing unmarked, identity `1h` + `global`, reporting unmarked, everything
+ *    else joined as `org`.
  *
- * 1. MCP tools present (skipGlobalCacheForSystemPrompt=true):
- *    Returns up to 3 blocks with org-level caching (no global cache on system prompt):
- *    - Attribution header (cacheScope=null)
- *    - System prompt prefix (cacheScope='org')
- *    - Everything else concatenated (cacheScope='org')
- *
- * 2. Global cache mode with boundary marker (1P only, boundary found):
- *    Returns up to 4 blocks:
- *    - Attribution header (cacheScope=null)
- *    - System prompt prefix (cacheScope=null)
- *    - Static content before boundary (cacheScope='global')
- *    - Dynamic content after boundary (cacheScope=null)
- *
- * 3. Default mode (3P providers, or boundary missing):
- *    Returns up to 3 blocks with org-level caching:
- *    - Attribution header (cacheScope=null)
- *    - System prompt prefix (cacheScope='org')
- *    - Everything else concatenated (cacheScope='org')
+ * The boundary marker never enters the body. Reporting is the exact
+ * `# Reporting outcomes` block, not a substring of another section.
  */
 export function splitSysPromptPrefix(
   systemPrompt: SystemPrompt,
   options?: { skipGlobalCacheForSystemPrompt?: boolean },
 ): SystemPromptBlock[] {
   const useGlobalCacheFeature = shouldUseGlobalCacheScope()
-  if (useGlobalCacheFeature && options?.skipGlobalCacheForSystemPrompt) {
+  const boundaryIndex = systemPrompt.findIndex(
+    (block) => block === SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+  )
+
+  const classify = (blocks: readonly string[]): ClassifiedSystemPrompt => {
+    let attributionHeader: string | undefined
+    let systemPromptPrefix: string | undefined
+    let reporting: string | undefined
+    const before: string[] = []
+    const after: string[] = []
+    blocks.forEach((block, index) => {
+      if (!block || block === SYSTEM_PROMPT_DYNAMIC_BOUNDARY) return
+      if (block.startsWith('x-anthropic-billing-header')) {
+        attributionHeader = block
+      } else if (CLI_SYSPROMPT_PREFIXES.has(block)) {
+        systemPromptPrefix = block
+      } else if (block === SYSTEM_PROMPT_REPORTING_OUTCOMES) {
+        reporting = block
+      } else if (boundaryIndex !== -1 && index < boundaryIndex) {
+        before.push(block)
+      } else if (boundaryIndex !== -1) {
+        after.push(block)
+      } else {
+        before.push(block)
+      }
+    })
+    return { attributionHeader, systemPromptPrefix, reporting, before, after }
+  }
+
+  const pushOwned = (
+    result: SystemPromptBlock[],
+    parts: ClassifiedSystemPrompt,
+  ) => {
+    if (parts.attributionHeader) {
+      result.push({ text: parts.attributionHeader, cacheScope: null })
+    }
+    if (parts.systemPromptPrefix) {
+      // Official short request marks the identity block, not only the static body.
+      result.push({ text: parts.systemPromptPrefix, cacheScope: 'global' })
+    }
+    if (parts.reporting && parts.attributionHeader && parts.systemPromptPrefix) {
+      result.push({ text: parts.reporting, cacheScope: null })
+    }
+  }
+
+  if (
+    useGlobalCacheFeature &&
+    options?.skipGlobalCacheForSystemPrompt &&
+    boundaryIndex === -1
+  ) {
     logEvent('tengu_sysprompt_using_tool_based_cache', {
       promptBlockCount: systemPrompt.length,
     })
-
-    // Filter out boundary marker, return blocks without global scope
-    let attributionHeader: string | undefined
-    let systemPromptPrefix: string | undefined
-    const rest: string[] = []
-
-    for (const prompt of systemPrompt) {
-      if (!prompt) continue
-      if (prompt === SYSTEM_PROMPT_DYNAMIC_BOUNDARY) continue // Skip boundary
-      if (prompt.startsWith('x-anthropic-billing-header')) {
-        attributionHeader = prompt
-      } else if (CLI_SYSPROMPT_PREFIXES.has(prompt)) {
-        systemPromptPrefix = prompt
-      } else {
-        rest.push(prompt)
-      }
-    }
-
+    const parts = classify(systemPrompt)
     const result: SystemPromptBlock[] = []
-    if (attributionHeader) {
-      result.push({ text: attributionHeader, cacheScope: null })
-    }
-    if (systemPromptPrefix) {
-      result.push({ text: systemPromptPrefix, cacheScope: 'org' })
-    }
-    const restJoined = rest.join('\n\n')
-    if (restJoined) {
-      result.push({ text: restJoined, cacheScope: 'org' })
-    }
+    pushOwned(result, parts)
+    const restJoined = parts.before.join('\n\n')
+    if (restJoined) result.push({ text: restJoined, cacheScope: 'org' })
+    return result
+  }
+
+  if (useGlobalCacheFeature && boundaryIndex !== -1) {
+    const parts = classify(systemPrompt)
+    const result: SystemPromptBlock[] = []
+    pushOwned(result, parts)
+    const staticJoined = parts.before.join('\n\n')
+    if (staticJoined) result.push({ text: staticJoined, cacheScope: 'global' })
+    const dynamicJoined = parts.after.join('\n\n')
+    if (dynamicJoined) result.push({ text: dynamicJoined, cacheScope: 'org' })
+    logEvent('tengu_sysprompt_boundary_found', {
+      blockCount: result.length,
+      staticBlockLength: staticJoined.length,
+      dynamicBlockLength: dynamicJoined.length,
+    })
     return result
   }
 
   if (useGlobalCacheFeature) {
-    const boundaryIndex = systemPrompt.findIndex(
-      s => s === SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
-    )
-    if (boundaryIndex !== -1) {
-      let attributionHeader: string | undefined
-      let systemPromptPrefix: string | undefined
-      const staticBlocks: string[] = []
-      const dynamicBlocks: string[] = []
-
-      for (let i = 0; i < systemPrompt.length; i++) {
-        const block = systemPrompt[i]
-        if (!block || block === SYSTEM_PROMPT_DYNAMIC_BOUNDARY) continue
-
-        if (block.startsWith('x-anthropic-billing-header')) {
-          attributionHeader = block
-        } else if (CLI_SYSPROMPT_PREFIXES.has(block)) {
-          systemPromptPrefix = block
-        } else if (i < boundaryIndex) {
-          staticBlocks.push(block)
-        } else {
-          dynamicBlocks.push(block)
-        }
-      }
-
-      const result: SystemPromptBlock[] = []
-      if (attributionHeader)
-        result.push({ text: attributionHeader, cacheScope: null })
-      if (systemPromptPrefix)
-        result.push({ text: systemPromptPrefix, cacheScope: null })
-      const staticJoined = staticBlocks.join('\n\n')
-      if (staticJoined)
-        result.push({ text: staticJoined, cacheScope: 'global' })
-      const dynamicJoined = dynamicBlocks.join('\n\n')
-      if (dynamicJoined) result.push({ text: dynamicJoined, cacheScope: null })
-
-      logEvent('tengu_sysprompt_boundary_found', {
-        blockCount: result.length,
-        staticBlockLength: staticJoined.length,
-        dynamicBlockLength: dynamicJoined.length,
-      })
-
-      return result
-    } else {
-      logEvent('tengu_sysprompt_missing_boundary_marker', {
-        promptBlockCount: systemPrompt.length,
-      })
-    }
-  }
-  let attributionHeader: string | undefined
-  let systemPromptPrefix: string | undefined
-  const rest: string[] = []
-
-  for (const block of systemPrompt) {
-    if (!block) continue
-
-    if (block.startsWith('x-anthropic-billing-header')) {
-      attributionHeader = block
-    } else if (CLI_SYSPROMPT_PREFIXES.has(block)) {
-      systemPromptPrefix = block
-    } else {
-      rest.push(block)
-    }
+    logEvent('tengu_sysprompt_missing_boundary_marker', {
+      promptBlockCount: systemPrompt.length,
+    })
   }
 
+  const parts = classify(systemPrompt)
   const result: SystemPromptBlock[] = []
-  if (attributionHeader)
-    result.push({ text: attributionHeader, cacheScope: null })
-  if (systemPromptPrefix)
-    result.push({ text: systemPromptPrefix, cacheScope: 'org' })
-  const restJoined = rest.join('\n\n')
+  pushOwned(result, parts)
+  const restJoined = [...parts.before, ...parts.after].join('\n\n')
   if (restJoined) result.push({ text: restJoined, cacheScope: 'org' })
   return result
 }

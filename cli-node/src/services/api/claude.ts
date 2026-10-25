@@ -411,9 +411,12 @@ export function getCacheControl({
   ttl?: '1h'
   scope?: CacheScope
 } {
+  // Official --print marks system[2]/system[3] with 1h even for a mock token.
+  // Message markers stay on the subscriber allowlist.
+  const oneHour = scope === 'global' || should1hCacheTTL(querySource)
   return {
     type: 'ephemeral',
-    ...(should1hCacheTTL(querySource) && { ttl: '1h' }),
+    ...(oneHour && { ttl: '1h' }),
     ...(scope === 'global' && { scope }),
   }
 }
@@ -1555,7 +1558,9 @@ async function* queryModel(
           getAttributionHeader(fingerprint, {
             ...gates,
             ...billingIndexes,
-            isSubagent: true,
+            isSubagent:
+              typeof options.querySource === 'string' &&
+              options.querySource.startsWith('agent:'),
             prevReqId: previousRequestId,
             promptId,
             turnOrigin: resolveTurnOrigin(options.querySource),
@@ -1618,7 +1623,9 @@ async function* queryModel(
         getAttributionHeader(fingerprint, {
           ...gates,
           ...billingIndexes,
-          isSubagent: true,
+          isSubagent:
+            typeof options.querySource === 'string' &&
+            options.querySource.startsWith('agent:'),
           prevReqId: previousRequestId,
           promptId,
           turnOrigin: resolveTurnOrigin(options.querySource),
@@ -2055,6 +2062,19 @@ async function* queryModel(
       outputConfig: outputConfig as Record<string, unknown>,
       speed,
     })
+    if (
+      options.wireBody &&
+      !Object.hasOwn(options.wireBody, 'thinking') &&
+      !Object.hasOwn(options.wireBody, 'thread') &&
+      thinkingConfig.type === 'adaptive'
+    ) {
+      // assembleMessageRequest drops an omitted caller field. Official --print
+      // still sends adaptive/omitted; a thread continuation must stay omitted.
+      params.thinking = {
+        type: 'adaptive',
+        ...(thinkingConfig.display ? { display: thinkingConfig.display } : {}),
+      }
+    }
     if (isKinQuerySource(options.querySource) && !options.requestContext) {
       // The gateway's user marker carries the selected panel TTL. Template
       // markers and SDK extra-body merges must not override that policy.

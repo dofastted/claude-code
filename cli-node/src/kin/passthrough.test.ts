@@ -29,9 +29,9 @@ test('thinkingFromRequest disabled stays disabled', () => {
   expect(out).toEqual({ type: 'disabled' })
 })
 
-test('thinkingFromRequest ignores spawn adaptive when job omits thinking', () => {
+test('thinkingFromRequest fills omitted thinking as adaptive omitted', () => {
   const out = thinkingFromRequest({}, { type: 'adaptive' })
-  expect(out).toEqual({ type: 'disabled' })
+  expect(out).toEqual({ type: 'adaptive', display: 'omitted' })
 })
 
 test('pickRateLimitHeaders keeps Extra windows and drops noise', () => {

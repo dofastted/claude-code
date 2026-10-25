@@ -544,6 +544,6 @@ export function thinkingFromRequest(
 		if (rec.type === "disabled" || rec.type === "none")
 			return { type: "disabled" };
 	}
-	// Job request is the only policy source. Spawn default is sonnet adaptive.
-	return { type: "disabled" };
+	// Official --print fills a missing thinking block. An explicit disabled stays disabled.
+	return { type: "adaptive", display: "omitted" };
 }
