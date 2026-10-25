@@ -851,6 +851,42 @@ ${SEVERITY_OUTPUT_FORMAT}`,
  * Both stages share the same system prompt and user content, benefiting from
  * prompt caching (1h TTL) across calls.
  */
+type Stage2NullVerdict = {
+  stage1Stands: boolean
+  reason: string
+  failureMode?: 'unparseable' | 'policy_refusal'
+  refusedBySafeguard?: boolean
+}
+
+/** Stage 1 block plus a stage 2 refusal stays a real block, not a missing verdict. */
+export function resolveStage2NullVerdict(input: {
+  stage1Blocked: boolean
+  stage1Refused: boolean
+  stage1Reason: string | undefined
+  stage2StopReason: string | null
+}): Stage2NullVerdict {
+  if (input.stage1Blocked && input.stage2StopReason === 'refusal') {
+    return {
+      stage1Stands: true,
+      reason: input.stage1Reason ?? 'Blocked by fast classifier',
+    }
+  }
+  if (input.stage1Refused && input.stage2StopReason !== 'refusal') {
+    return {
+      stage1Stands: false,
+      reason: 'Classifier stage 1 unparseable - blocking for safety',
+      failureMode: 'policy_refusal',
+      refusedBySafeguard: true,
+    }
+  }
+  return {
+    stage1Stands: false,
+    reason: 'Classifier stage 2 unparseable - blocking for safety',
+    failureMode: 'unparseable',
+    ...(input.stage2StopReason === 'refusal' && { refusedBySafeguard: true }),
+  }
+}
+
 async function classifyYoloActionXml(
   prefixMessages: Anthropic.MessageParam[],
   systemPrompt: string,
@@ -1088,25 +1124,26 @@ async function classifyYoloActionXml(
       stage1Opts ? [stage1Opts, stage2Opts] : [stage2Opts],
     )
 
+
     if (stage2Block === null) {
-      const stage1Stands =
-        stage1Blocked && stage2Raw.stop_reason === 'refusal'
-      const stage1RefusalStands =
-        stage1Refused && stage2Raw.stop_reason !== 'refusal'
-      logAutoModeOutcome('parse_failure', model, { classifierType })
+      const verdict = resolveStage2NullVerdict({
+        stage1Blocked,
+        stage1Refused,
+        stage1Reason,
+        stage2StopReason: stage2Raw.stop_reason,
+      })
+      logAutoModeOutcome(verdict.stage1Stands ? 'success' : 'parse_failure', model, {
+        classifierType,
+      })
       return {
         shouldBlock: true,
-        reason: stage1Stands
-          ? (stage1Reason ?? 'Blocked by fast classifier')
-          : stage1RefusalStands
-            ? 'Classifier stage 1 unparseable - blocking for safety'
-            : 'Classifier stage 2 unparseable - blocking for safety',
-        failureMode: stage1RefusalStands ? 'policy_refusal' : 'unparseable',
-        refusedBySafeguard: stage1RefusalStands
-          ? true
-          : stage1Stands
-            ? false
-            : stage2Raw.stop_reason === 'refusal',
+        reason: verdict.reason,
+        ...(verdict.failureMode !== undefined && {
+          failureMode: verdict.failureMode,
+        }),
+        ...(verdict.refusedBySafeguard === true && {
+          refusedBySafeguard: true,
+        }),
         model,
         usage: totalUsage,
         durationMs: totalDurationMs,
