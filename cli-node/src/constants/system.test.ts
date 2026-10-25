@@ -1,5 +1,11 @@
 import { expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { getAttributionHeader } from './system.ts'
+import { getUserAgent } from '../utils/http.ts'
+import { officialCliUserAgent } from '../kin/officialFingerprint.ts'
+import { stampCchBody } from '../utils/cch.ts'
 
 test('billing always carries a CCH placeholder regardless of provider gates', () => {
   const previous = process.env.CLAUDE_CODE_ATTRIBUTION_HEADER
@@ -11,6 +17,31 @@ test('billing always carries a CCH placeholder regardless of provider gates', ()
     else process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = previous
   }
 })
+test('panel cc_entrypoint switches billing, both user agents and CCH sealing', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cc-entry-wire-'))
+  const path = join(dir, 'kernel.json')
+  const previous = process.env.KERNEL_CONFIG
+  process.env.KERNEL_CONFIG = path
+  process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = '1'
+  try {
+    writeFileSync(path, JSON.stringify({ cc_entrypoint: 'cli' }))
+    expect(getAttributionHeader('abc')).toContain('cc_entrypoint=cli;')
+    expect(getUserAgent()).toContain('(external, cli')
+    expect(officialCliUserAgent()).toContain('(external, cli)')
+    const raw = JSON.stringify({
+      system: [{ type: 'text', text: 'x-anthropic-billing-header: cc_version=2.1.303; cc_entrypoint=local-agent; cch=00000;' }],
+      messages: [{ role: 'user', content: 'hi' }],
+    })
+    const sealed = JSON.parse(stampCchBody(raw))
+    expect(sealed.system[0].text).toContain('cc_entrypoint=local-agent;')
+    expect(JSON.parse(stampCchBody(raw, false)).system[0].text).toContain('cc_entrypoint=local-agent;')
+  } finally {
+    if (previous == null) delete process.env.KERNEL_CONFIG
+    else process.env.KERNEL_CONFIG = previous
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 
 const PROJECT = 'claude_proj_01' + '1'.repeat(22)
 

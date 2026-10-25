@@ -124,6 +124,20 @@ export function readPanelAutoCompactWindow(path = kernelConfigPath()): number | 
   }
   return lastPanelAutoCompactWindow
 }
+export type CcEntrypoint = 'sdk-cli' | 'cli'
+
+/** Panel `cc_entrypoint`. Missing or invalid stays sdk-cli, matching the shipped default. */
+export function readPanelCcEntrypoint(path = kernelConfigPath()): CcEntrypoint {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !('cc_entrypoint' in parsed)) {
+      return 'sdk-cli'
+    }
+    return parsed.cc_entrypoint === 'cli' ? 'cli' : 'sdk-cli'
+  } catch {
+    return 'sdk-cli'
+  }
+}
 
 
 export function resolveKinCacheTtl(opts: {

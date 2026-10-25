@@ -51,7 +51,7 @@ test('enabled sealing rewrites a caller digest instead of leaving it stale', () 
   expect(enabled.system[0].text).toMatch(/cch=[0-9a-f]{5};/)
   expect(enabled.system[0].text).not.toContain('cch=cc746;')
   expect(enabled.system[0].text).not.toContain('cch=00000;')
-  expect(JSON.parse(stampCchBody(raw, false)).system[0].text).toMatch(/cc_entrypoint=sdk-cli; cch=00000;/)
+  expect(JSON.parse(stampCchBody(raw, false)).system[0].text).toBe('x-anthropic-billing-header: cc_version=2.1.296; cch=00000;')
 })
 
 test('CCH projection uses compact JSON scanner needles', () => {

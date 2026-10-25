@@ -6,6 +6,7 @@ import { isEnvDefinedFalsy, isEnvTruthy } from '../utils/envUtils.js'
 import { getAPIProvider, isFirstPartyAnthropicBaseUrl } from '../utils/model/providers.js'
 import { getWorkload } from '../utils/workloadContext.js'
 import { officialCliVersion } from '../kin/cliVersion.js'
+import { readPanelCcEntrypoint } from '../kin/cacheTtl.js'
 export const CC_VERSION = '2.1.296'
 
 const DEFAULT_PREFIX = `You are Claude Code, Anthropic's official CLI for Claude.`
@@ -207,7 +208,7 @@ export function getAttributionHeader(fingerprint: string, opts: AttributionOptio
   }
 
   const version = `${officialCliVersion()}.${fingerprint}`
-  const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT || 'unknown'
+  const entrypoint = readPanelCcEntrypoint()
   const cch = opts.includeCch === false ? '' : ' cch=00000;'
   const workload = getWorkload()
   const workloadPair = workload ? ` cc_workload=${workload};` : ''

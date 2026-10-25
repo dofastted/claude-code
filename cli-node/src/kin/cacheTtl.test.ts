@@ -11,6 +11,7 @@ import {
   readPanelCachedMicrocompactEnabled,
   readPanelCacheTtl,
   readPanelCchEnabled,
+  readPanelCcEntrypoint,
   resolveKinCacheTtl,
 } from './cacheTtl.ts'
 
@@ -112,6 +113,22 @@ test('panel compact window inherits the model unless a valid value is set', () =
     expect(readPanelAutoCompactWindow(path)).toBe(1_000_000)
     writeFileSync(path, JSON.stringify({ auto_compact_window: null }))
     expect(readPanelAutoCompactWindow(path)).toBeNull()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+test('panel cc_entrypoint hot reloads and rejects anything except cli', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cc-entry-'))
+  const path = join(dir, 'kernel.json')
+  try {
+    writeFileSync(path, '{}')
+    expect(readPanelCcEntrypoint(path)).toBe('sdk-cli')
+    writeFileSync(path, JSON.stringify({ cc_entrypoint: 'cli' }))
+    expect(readPanelCcEntrypoint(path)).toBe('cli')
+    writeFileSync(path, JSON.stringify({ cc_entrypoint: 'vscode' }))
+    expect(readPanelCcEntrypoint(path)).toBe('sdk-cli')
+    writeFileSync(path, '{')
+    expect(readPanelCcEntrypoint(path)).toBe('sdk-cli')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
