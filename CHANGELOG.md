@@ -2,6 +2,13 @@
 
 记录本地源码、构建和明确标注的部署结果；未标注上线的记录不代表已发布、已部署或已同步到运行中的槽位。
 
+## 2026-10-25 — cli-node 2.1.303 隔离构建（未发布、未部署）
+
+- 源码基线 `ed9fd21`。缺省 thinking 补 `adaptive/omitted`，缺省 effort 补 `medium`；`agent:kin` 不写 `cc_is_subagent`。空 system 补官方 harness 与 guidance，断点分别为 `1h+global` 和 `1h`。beta 按官方 14 项顺序补齐；setup-token 不注入 `claude-code` session beta。版本与出站 UA 缺省为 `2.1.303`。
+- 构建从 `ed9fd21` 干净导出，不使用脏工作树。外部依赖固定为 `src/lib/protocol/claude-code-betas.mjs`，SHA256 `0dd4d8d920968596db62d6a7edfbb5a9cbc505d38269f727389f812e98588da4`。快照缺少已提交代码所需的 `SYSTEM_PROMPT_REPORTING_OUTCOMES` 导出，构建只补这一项。
+- plain 111237248 字节，SHA256 `d6fd3a919bf3016756a1120f072ccc987235c5bb244dd2000d461b08a3d5ed9d`。UPX 5.0.2 `--best --lzma` 后 27177428 字节，SHA256 `2c1b271df033e23830cc8cdc0181fab60d4de96ff8cf4cd406651aecd9b5ae9f`。`upx -t` 通过，`--version` 为 `2.1.303 (Claude Code)`。
+- 产物已替换 `vm2api/share/wrap-cli/cli-node`。二进制仍由 gitignore 排除，payload 未更新，线上槽位未部署。
+
 ## 2026-10-24 — CLI 最终出站请求头回传（未发布、未部署）
 
 - 原生 job 通过 AsyncLocalStorage 隔离请求头观察者；SDK 最终 fetch 前、CCH 与 Content-Length 处理后采集，不重新组装请求或修改正文。凭证及未知自定义头值在 CLI 内先脱敏，再通过已有 `stream_event` 任务通道回传。Rust 不改动、不重编。
