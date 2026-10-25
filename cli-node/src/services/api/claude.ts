@@ -1564,7 +1564,8 @@ async function* queryModel(
             ...billingIndexes,
             isSubagent:
               typeof options.querySource === 'string' &&
-              options.querySource.startsWith('agent:'),
+              options.querySource.startsWith('agent:') &&
+              options.querySource !== 'agent:kin',
             prevReqId: previousRequestId,
             promptId,
             turnOrigin: resolveTurnOrigin(options.querySource),
@@ -1582,7 +1583,8 @@ async function* queryModel(
             ...billingIndexes,
             isSubagent:
               typeof options.querySource === 'string' &&
-              options.querySource.startsWith('agent:'),
+              options.querySource.startsWith('agent:') &&
+              options.querySource !== 'agent:kin',
             prevReqId: previousRequestId,
             promptId,
             turnOrigin: resolveTurnOrigin(options.querySource),
@@ -1599,7 +1601,8 @@ async function* queryModel(
           ...billingIndexes,
           isSubagent:
             typeof options.querySource === 'string' &&
-            options.querySource.startsWith('agent:'),
+            options.querySource.startsWith('agent:') &&
+            options.querySource !== 'agent:kin',
           prevReqId: previousRequestId,
           promptId,
           turnOrigin: resolveTurnOrigin(options.querySource),
@@ -1636,7 +1639,8 @@ async function* queryModel(
           ...billingIndexes,
           isSubagent:
             typeof options.querySource === 'string' &&
-            options.querySource.startsWith('agent:'),
+            options.querySource.startsWith('agent:') &&
+            options.querySource !== 'agent:kin',
           prevReqId: previousRequestId,
           promptId,
           turnOrigin: resolveTurnOrigin(options.querySource),
