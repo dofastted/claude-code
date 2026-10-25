@@ -36,6 +36,13 @@ import {
   resolveTurnOrigin,
 } from '../../constants/system.js'
 import {
+  OFFICIAL_PRINT_GUIDANCE,
+  OFFICIAL_PRINT_HARNESS,
+} from '../../constants/officialPrint.js'
+import {
+  SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+} from '../../constants/prompts.js'
+import {
   readPanelCachedMicrocompactEnabled,
 } from '../../kin/cacheTtl.js'
 import { mergeOfficialExtraBetas } from '../../kin/officialBetas.js'
@@ -1584,6 +1591,7 @@ async function* queryModel(
       }),
     )
   } else {
+    const callerText = systemPrompt.filter((block) => block.trim())
     systemPrompt = asSystemPrompt(
       [
         getAttributionHeader(fingerprint, {
@@ -1600,7 +1608,13 @@ async function* queryModel(
           isNonInteractive: options.isNonInteractiveSession,
           hasAppendSystemPrompt: options.hasAppendSystemPrompt,
         }),
-        ...systemPrompt,
+        ...(callerText.length
+          ? callerText
+          : [
+              OFFICIAL_PRINT_HARNESS,
+              SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+              OFFICIAL_PRINT_GUIDANCE,
+            ]),
         ...(advisorModel ? [ADVISOR_TOOL_INSTRUCTIONS] : []),
         ...(injectChromeHere ? [CHROME_TOOL_SEARCH_INSTRUCTIONS] : []),
       ].filter(Boolean),
