@@ -1833,14 +1833,22 @@ async function* queryModel(
       ...((options.outputConfigOverride as BetaOutputConfig) ?? {}),
     }
 
-    if (!options.requestContext && !options.wireBody)
+    if (!options.requestContext) {
+      const callerSetEffort = Boolean(
+        options.wireBody &&
+        options.wireBody.output_config &&
+        typeof options.wireBody.output_config === 'object' &&
+        'effort' in options.wireBody.output_config
+      )
+      // Official --print sends medium when the request omits effort.
       configureEffortParams(
-        effort,
+        callerSetEffort ? effort : effort ?? 'medium',
         outputConfig,
         extraBodyParams,
         betasParams,
         options.model,
       )
+    }
 
     configureTaskBudgetParams(
       options.taskBudget,

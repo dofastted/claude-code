@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mergeOfficialExtraBetas } from './officialBetas.ts'
+import { OFFICIAL_MESSAGE_BETAS, mergeOfficialExtraBetas } from './officialBetas.ts'
 
 test('merging explicit betas preserves credential and feature opt-ins without duplication', () => {
   const result = mergeOfficialExtraBetas([
@@ -11,7 +11,11 @@ test('merging explicit betas preserves credential and feature opt-ins without du
   expect(result).toContain('caller-feature')
   expect(result.filter((beta) => beta === 'caller-feature')).toHaveLength(1)
   expect(result).toContain('advanced-tool-use-2025-11-20')
+  expect(result).toContain('thinking-binding-controls-2026-08-01')
+  expect(result).toContain('cache-diagnosis-2026-04-07')
   expect(result).not.toContain('oauth-2025-04-20')
-  expect(result).not.toContain('thinking-binding-controls-2026-08-01')
-  expect(result).not.toContain('cache-diagnosis-2026-04-07')
+  const official = result.filter((beta) => OFFICIAL_MESSAGE_BETAS.includes(beta))
+  expect(official).toEqual(
+    OFFICIAL_MESSAGE_BETAS.filter((beta) => result.includes(beta)),
+  )
 })
