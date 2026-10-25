@@ -611,7 +611,7 @@ fn chmod_socket(path: &Path) -> Result<(), String> {
         use std::os::unix::fs::PermissionsExt;
         // 0660 lets the slot user and the control-plane group share the socket.
         // 0600 hides it from the local WSL user that starts the control plane.
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))
             .map_err(|err| format!("chmod socket: {err}"))?;
     }
     let _ = path;
