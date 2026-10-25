@@ -1253,7 +1253,7 @@ async function* queryModel(
       options.querySource === 'verification_agent')
   let betas = getMergedBetas(options.model, { isAgenticQuery })
   if (isKinQuerySource(options.querySource)) {
-    betas = mergeOfficialExtraBetas(betas)
+    betas = mergeOfficialExtraBetas(betas, options.model)
   }
 
   // Always send the advisor beta header when advisor is enabled, so
@@ -2104,7 +2104,7 @@ async function* queryModel(
 
     const gatedBetas = withRequestProtocolBetas(requestBetas, params)
     params.betas = isKinQuerySource(options.querySource)
-      ? mergeOfficialExtraBetas(gatedBetas)
+      ? mergeOfficialExtraBetas(gatedBetas, options.model)
       : gatedBetas
     lastRequestBetas = params.betas
     assembledRequest.current?.(params)

@@ -41,19 +41,18 @@ test('303 print betas match the captured haiku, sonnet, opus, fable, and auto ar
   delete process.env.DISABLE_INTERLEAVED_THINKING
   clearBetasCaches()
   try {
-    const selected = (model: string) => getMergedBetas(model, { isAgenticQuery: true })
-    const prefix = (betas: readonly string[]) =>
-      betas.slice(0, betas.indexOf('prompt-caching-scope-2026-01-05') + 1)
+    const selected = (model: string) =>
+      mergeOfficialExtraBetas(getMergedBetas(model, { isAgenticQuery: true }), model)
     const haiku = selected('claude-haiku-5-5')
-    expect(prefix(haiku)).toEqual(prefix(HAIKU_303))
     expect(haiku[5]).toBe('claude-code-20250219')
+    expect(haiku.slice(0, 6)).toEqual(HAIKU_303.slice(0, 6))
     for (const model of ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1']) {
       const got = selected(model)
-      expect(prefix(got)).toEqual(prefix(SONNET_303))
       expect(got[0]).toBe('claude-code-20250219')
+      expect(got.slice(0, 6)).toEqual(SONNET_303.slice(0, 6))
     }
     const auto = selected('auto')
-    expect(prefix(auto)).toEqual(prefix(AUTO_303))
+    expect(auto.slice(0, 6)).toEqual(AUTO_303.slice(0, 6))
     expect(auto.includes('per-turn-control-2026-07-01')).toBe(false)
   } finally {
     clearBetasCaches()
