@@ -59,8 +59,8 @@ export function assembleMessageRequest(
   const wire = input.wireBody
   const body: MessageRequestBody = {
     model: input.model,
-    messages: input.messages,
     system: input.system,
+    messages: input.messages,
     tools: input.tools,
     tool_choice: input.tool_choice,
     betas: input.betas,
@@ -100,6 +100,8 @@ export function assembleMessageRequest(
   if (Object.keys(input.outputConfig).length > 0) {
     body.output_config = input.outputConfig
   }
+  // Node uses this to select the lean assembler. It is not an Anthropic field.
+  delete body.kin_outbound_shape
   if (input.speed !== undefined && !wire) body.speed = input.speed
   return body as FinalMessageRequestBody
 }
