@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { assembledRequest, queryKinMessagesWithStreaming } from '../services/api/claude.ts'
+import { assembledRequest, queryKinMessagesWithStreaming, queryModelWithStreaming } from '../services/api/claude.ts'
 import { createUserMessage } from '../utils/messages.ts'
 
 async function capture(wire: Record<string, unknown>, extra: Record<string, unknown> = {}) {
@@ -119,4 +119,46 @@ test('thread continuation keeps omitted tools and thinking omitted', async () =>
   })
   expect(Object.hasOwn(thread || {}, 'tools')).toBe(false)
   expect(Object.hasOwn(thread || {}, 'thinking')).toBe(false)
+})
+
+test('generated thinking still turns a forced tool choice into auto', async () => {
+  let captured: Record<string, unknown> | undefined
+  assembledRequest.current = (params) => {
+    captured = params
+    throw new Error('stop-before-upstream')
+  }
+  const previous = process.env.ANTHROPIC_BASE_URL
+  process.env.ANTHROPIC_BASE_URL = 'http://127.0.0.1:9'
+  process.env.CLAUDE_CODE_SKIP_VCR = '1'
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  try {
+    const stream = queryModelWithStreaming({
+      messages: [createUserMessage({ content: 'hello' })],
+      systemPrompt: ['caller'],
+      thinkingConfig: { type: 'adaptive' },
+      tools: [],
+      signal: AbortSignal.abort(),
+      options: {
+        model: 'claude-sonnet-4-5',
+        toolChoice: { type: 'tool', name: 'Read' },
+        mcpTools: [],
+        getToolPermissionContext: async () => ({ mode: 'bypassPermissions', additionalWorkingDirectories: new Map(), alwaysAllowRules: {}, alwaysDenyRules: {}, alwaysAskRules: {}, isBypassPermissionsModeAvailable: true }),
+        querySource: 'repl_main_thread',
+        isNonInteractiveSession: true,
+        hasAppendSystemPrompt: false,
+      },
+    })
+    for await (const _event of stream) {
+      // The observer throws before the request leaves the process.
+    }
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes('stop-before-upstream')) throw error
+  } finally {
+    assembledRequest.current = undefined
+    delete process.env.CLAUDE_CODE_SKIP_VCR
+    delete process.env.ANTHROPIC_API_KEY
+    if (previous == null) delete process.env.ANTHROPIC_BASE_URL
+    else process.env.ANTHROPIC_BASE_URL = previous
+  }
+  expect(captured?.tool_choice).toEqual({ type: 'auto' })
 })

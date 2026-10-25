@@ -2080,7 +2080,7 @@ async function* queryModel(
       messages: apiMessages,
       system,
       tools: allTools,
-      tool_choice: options.toolChoice,
+      tool_choice: toolChoice,
       betas: requestBetas,
       metadata:
         options.wireBody?.metadata &&
