@@ -29,16 +29,12 @@ export const OFFICIAL_EXTRA_BETAS = [
 ] as const
 
 export function mergeOfficialExtraBetas(betas: string[]): string[] {
+  const have = betas.filter(Boolean)
   const out: string[] = []
-  for (const beta of betas) {
-    if (beta && !out.includes(beta)) out.push(beta)
-  }
   for (const beta of OFFICIAL_MESSAGE_BETAS) {
-    // claude-code-20250219 is a session beta. Setup-token inference rejects it,
-    // and Haiku only receives it from the agentic insert.
-    if (beta === 'claude-code-20250219') continue
-    // auto is not in the per_turn_effort catalog. Absence is the selector's decision.
-    if (beta === 'per-turn-control-2026-07-01') continue
+    if (have.includes(beta) && !out.includes(beta)) out.push(beta)
+  }
+  for (const beta of have) {
     if (!out.includes(beta)) out.push(beta)
   }
   return out

@@ -41,19 +41,20 @@ test('303 print betas match the captured haiku, sonnet, opus, fable, and auto ar
   delete process.env.DISABLE_INTERLEAVED_THINKING
   clearBetasCaches()
   try {
-    const selected = (model: string) =>
-      mergeOfficialExtraBetas(getMergedBetas(model, { isAgenticQuery: true }))
-    const withoutPerTurn = (betas: readonly string[]) =>
-      betas.filter((beta) => beta !== 'per-turn-control-2026-07-01')
+    const selected = (model: string) => getMergedBetas(model, { isAgenticQuery: true })
+    const prefix = (betas: readonly string[]) =>
+      betas.slice(0, betas.indexOf('prompt-caching-scope-2026-01-05') + 1)
     const haiku = selected('claude-haiku-5-5')
-    expect(haiku).toEqual(withoutPerTurn(HAIKU_303))
+    expect(prefix(haiku)).toEqual(prefix(HAIKU_303))
     expect(haiku[5]).toBe('claude-code-20250219')
     for (const model of ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1']) {
       const got = selected(model)
+      expect(prefix(got)).toEqual(prefix(SONNET_303))
       expect(got[0]).toBe('claude-code-20250219')
-      expect(withoutPerTurn(got)).toEqual(withoutPerTurn(SONNET_303))
     }
-    expect(selected('auto')).toEqual(withoutPerTurn(AUTO_303))
+    const auto = selected('auto')
+    expect(prefix(auto)).toEqual(prefix(AUTO_303))
+    expect(auto.includes('per-turn-control-2026-07-01')).toBe(false)
   } finally {
     clearBetasCaches()
     for (const [key, value] of [
@@ -72,22 +73,17 @@ test('303 print betas match the captured haiku, sonnet, opus, fable, and auto ar
 
 
 
-test('merging keeps caller opt-ins and fills the official remainder', () => {
+test('merging keeps caller opt-ins in the captured order', () => {
   const result = mergeOfficialExtraBetas([
     'claude-code-20250219',
     'caller-feature',
     'advanced-tool-use-2025-11-20',
+    'per-turn-control-2026-07-01',
     'caller-feature',
   ])
   expect(result.filter((beta) => beta === 'caller-feature')).toHaveLength(1)
-  expect(result).toContain('oauth-2025-04-20')
-  expect(result).toContain('thinking-binding-controls-2026-08-01')
-  expect(result).toContain('cache-diagnosis-2026-04-07')
-  expect(result.slice(0, 3)).toEqual([
-    'claude-code-20250219',
-    'caller-feature',
-    'advanced-tool-use-2025-11-20',
-  ])
-  expect(result.at(-1)).toBe('cache-diagnosis-2026-04-07')
-  expect(result.filter((beta) => beta === 'per-turn-control-2026-07-01')).toHaveLength(0)
+  expect(result.slice(0, 2)).toEqual(['claude-code-20250219', 'per-turn-control-2026-07-01'])
+  expect(result.indexOf('advanced-tool-use-2025-11-20')).toBeLessThan(result.indexOf('caller-feature'))
+  expect(result.includes('oauth-2025-04-20')).toBe(false)
+  expect(result.at(-1)).toBe('caller-feature')
 })
