@@ -1,3 +1,10 @@
+# cli-node auto 分类器
+
+## 2026-10-26 — 对齐 2.1.310
+
+- 请求、判定、模型优先级和白名单见仓库根 `CHANGELOG.md` 同日记录。源码在 `src/utils/permissions/yoloClassifier.ts` 与 `classifierDecision.ts`。
+- stage 2 refusal 的回归测试是 `src/utils/permissions/yoloClassifier.test.ts`。构建和部署边界以根记录为准：本机文件已换，运行态和 payload pin 没有更新。
+
 # cli-node 2.1.296
 
 本目录是 vm2api 使用的 Claude Code 源码树和构建入口。后续 cli-node 改动只在这里进行；`dist/`、`node_modules/`、`target/` 为本地构建产物，不作为源码基线提交。

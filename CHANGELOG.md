@@ -2,6 +2,13 @@
 
 记录本地源码、构建和明确标注的部署结果；未标注上线的记录不代表已发布、已部署或已同步到运行中的槽位。
 
+## 2026-10-26 — auto 分类器对齐 2.1.310
+
+- `yoloClassifier` 的请求体对齐 2.1.310 `bbr`：temperature 默认 1，stage 2 `max_tokens` 为 `8192 + thinking headroom`，强制 attribution，并在 firstParty 实验 beta 开启时带 `auto-mode-classifier-2026-07-16`。模型优先级改为 GrowthBook 的 `modelByMainModel` / `model`，再看 `CLAUDE_CODE_AUTO_MODE_MODEL`。
+- `<block>` 里 yes/no 冲突按解析失败拦截。sonnet-5 与 opus-4-8 走 `<severity>`，阈值按模型和站点，其它模型不外推。stage 1 已拦截且 stage 2 是 refusal 时保留正常拦截，不标成没有判定。空 `classifierOnly()` 输入改为 deny。浏览器白名单按动作判断，`save_to_disk` 的点击不放行。
+- 定向验证：`bun test src/utils/permissions/yoloClassifier.test.ts` 3 pass；`<block>` 冲突与浏览器白名单 23 项通过。全量 `tsc` 仍被仓库原有 `QueryEngine.ts` 错误挡住，不是这次验收。
+- 本机产物：`bun-linux-x64-baseline`，UPX 5.0.1 `--best --lzma`，27,789,300 字节，SHA256 `82c60c68ef75c3d1c8ed3561da936c4b9db601d1d06c83e662e1e7854ba4f357`。`--version` 为 `2.1.303 (Claude Code)`。已替换本机 `share/wrap-cli/cli-node` 和 `vms/vm-10/cli-home/.kin/cli-node`，旧文件在 `/mnt/x/vm2api/.deploy-bak-cli-node-20261025T215624Z`。当时面板和槽内 cli-node 都没在跑，没有走 wrap-cli/sync，没有重启 dataplane，没有发真实请求。`deploy/payload.json` 仍钉旧 SHA256 `cb2f8fb9…`，之后 `fetch:payload` 会把这份文件盖回去。
+
 ## 2026-10-25 — cli-node 2.1.303 隔离构建（未发布、未部署）
 
 - 源码基线 `ed9fd21`。缺省 thinking 补 `adaptive/omitted`，缺省 effort 补 `medium`；`agent:kin` 不写 `cc_is_subagent`。空 system 补官方 harness 与 guidance，断点分别为 `1h+global` 和 `1h`。beta 按官方 14 项顺序补齐；setup-token 不注入 `claude-code` session beta。版本与出站 UA 缺省为 `2.1.303`。
