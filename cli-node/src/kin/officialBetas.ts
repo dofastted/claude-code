@@ -30,7 +30,9 @@ export const OFFICIAL_EXTRA_BETAS = [
 
 export function mergeOfficialExtraBetas(betas: string[]): string[] {
   const have = [...betas]
-  for (const beta of OFFICIAL_EXTRA_BETAS) {
+  for (const beta of OFFICIAL_MESSAGE_BETAS) {
+    // claude-code-20250219 is a session beta. Setup-token inference rejects it.
+    if (beta === 'claude-code-20250219') continue
     if (!have.includes(beta)) have.push(beta)
   }
   const out: string[] = []

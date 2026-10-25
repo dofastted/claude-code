@@ -2099,10 +2099,9 @@ async function* queryModel(
     }
 
     const gatedBetas = withRequestProtocolBetas(requestBetas, params)
-    params.betas =
-      isKinQuerySource(options.querySource) && !inferenceOnly
-        ? mergeOfficialExtraBetas(gatedBetas)
-        : gatedBetas
+    params.betas = isKinQuerySource(options.querySource)
+      ? mergeOfficialExtraBetas(gatedBetas)
+      : gatedBetas
     lastRequestBetas = params.betas
     assembledRequest.current?.(params)
     return params
