@@ -45,8 +45,8 @@ export function getCLISyspromptPrefix(options?: {
  * Check if attribution header is enabled.
  * Enabled by default, can be disabled via env var or GrowthBook killswitch.
  */
-function isAttributionHeaderEnabled(): boolean {
-  if (isEnvDefinedFalsy(process.env.CLAUDE_CODE_ATTRIBUTION_HEADER)) {
+function isAttributionHeaderEnabled(ignoreEnvOptOut = false): boolean {
+  if (!ignoreEnvOptOut && isEnvDefinedFalsy(process.env.CLAUDE_CODE_ATTRIBUTION_HEADER)) {
     return false
   }
   return getFeatureValue_CACHED_MAY_BE_STALE('tengu_attribution_header', true)
@@ -92,6 +92,8 @@ export type AttributionOptions = {
   hostVerdict?: string
   projectId?: string
   projectSource?: string
+  /** Auto mode ignores the env opt-out. Org killswitch still applies. */
+  ignoreEnvOptOut?: boolean
 }
 
 function billingProvider(): 'gateway' | 'firstParty' | 'bedrock' | 'vertex' | 'foundry' {
@@ -203,7 +205,7 @@ export function billingIndexesFromMessages(messages: unknown): {
 }
 
 export function getAttributionHeader(fingerprint: string, opts: AttributionOptions = {}): string {
-  if (!isAttributionHeaderEnabled()) {
+  if (!isAttributionHeaderEnabled(opts.ignoreEnvOptOut === true)) {
     return ''
   }
 

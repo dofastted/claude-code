@@ -436,6 +436,13 @@ export type Tool<
   }
   isOpenWorld?(input: z.infer<Input>): boolean
   requiresUserInteraction?(): boolean
+  /**
+   * When true, only the auto-mode classifier may allow this tool. An empty
+   * `toAutoClassifierInput` is a tool bug and denies instead of skipping.
+   */
+  classifierOnly?(): boolean
+  /** When true, the auto-mode safe allowlist does not skip this tool. */
+  excludedFromAutoModeAllowlist?(): boolean
   isMcp?: boolean
   isLsp?: boolean
   /**

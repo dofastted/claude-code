@@ -304,6 +304,8 @@ export type PermissionDecisionReason =
       type: 'classifier'
       classifier: string
       reason: string
+      /** True when the classifier produced no judgment of the action. */
+      noVerdict?: boolean
     }
   | {
       type: 'workingDir'
@@ -356,6 +358,16 @@ export type YoloClassifierResult = {
   transcriptTooLong?: boolean
   /** The model used for this classifier call */
   model: string
+  /** False when the tool serialized to an empty classifier action. */
+  classifierRan?: boolean
+  /** Set when the verdict could not be parsed, or a safeguard refused it. */
+  failureMode?: 'unparseable' | 'policy_refusal'
+  /** API safety filter refused the classifier request. */
+  refusedBySafeguard?: boolean
+  /** Severity score from stage 1 when the model answered `<severity>`. */
+  stage1Severity?: number
+  /** Severity score from stage 2 when the model answered `<severity>`. */
+  stage2Severity?: number
   /** Token usage from the classifier API call (for overhead telemetry) */
   usage?: ClassifierUsage
   /** Duration of the classifier API call in ms */

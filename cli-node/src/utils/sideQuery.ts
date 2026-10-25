@@ -6,9 +6,10 @@ import type { QuerySource } from '../constants/querySource.js'
 import { getAttributionHeader, getCLISyspromptPrefix, resolveTurnOrigin } from '../constants/system.js'
 import { logEvent } from '../services/analytics/index.js'
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from '../services/analytics/metadata.js'
-import { getAPIMetadata } from '../services/api/claude.js'
+import { getAPIMetadata, getExtraBodyParams } from '../services/api/claude.js'
 import { getAnthropicClient } from '../services/api/client.js'
 import { isClaudeAISubscriber } from './auth.js'
+import { isEnvTruthy } from './envUtils.js'
 import { getModelBetas, modelSupportsStructuredOutputs } from './betas.js'
 import { computeFingerprint } from './fingerprint.js'
 import { normalizeModelStringForAPI } from './model/model.js'
@@ -56,6 +57,15 @@ export type SideQueryOptions = {
   stop_sequences?: string[]
   /** Attributes this call in tengu_api_success for COGS joining against reporting.sampling_calls. */
   querySource: QuerySource
+  /** Classifier-only beta appended after model betas. */
+  extraBetas?: string[]
+  /** Caller-owned body fields merged after the standard request. */
+  extraBodyParams?: Record<string, unknown>
+  /**
+   * Keep the billing header even when the env opt-out is set.
+   * Auto mode sets this; an org-disabled header still stays off.
+   */
+  forceAttributionHeader?: boolean
 }
 
 /**
@@ -114,6 +124,9 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
     temperature,
     thinking,
     stop_sequences,
+    extraBetas,
+    extraBodyParams,
+    forceAttributionHeader,
   } = opts
 
   const client = await getAnthropicClient({
@@ -122,6 +135,9 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
     source: 'side_query',
   })
   const betas = [...getModelBetas(model)]
+  for (const beta of extraBetas ?? []) {
+    if (beta && !betas.includes(beta)) betas.push(beta)
+  }
   // Add structured-outputs beta if using output_format and provider supports it
   if (output_format && modelSupportsStructuredOutputs(model) && !betas.includes(STRUCTURED_OUTPUTS_BETA_HEADER)) {
     betas.push(STRUCTURED_OUTPUTS_BETA_HEADER)
@@ -135,6 +151,9 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
   const attributionHeader = getAttributionHeader(fingerprint, {
     turnOrigin: resolveTurnOrigin(undefined),
     promptId: undefined,
+    ignoreEnvOptOut:
+      forceAttributionHeader === true &&
+      !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ATTRIBUTION_HEADER),
   })
 
   // Build system as array to keep attribution header in its own block
@@ -183,6 +202,8 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
       ...(thinkingConfig && { thinking: thinkingConfig }),
       ...(betas.length > 0 && { betas }),
       metadata: getAPIMetadata(),
+      ...getExtraBodyParams(),
+      ...extraBodyParams,
     },
     { signal },
   )
