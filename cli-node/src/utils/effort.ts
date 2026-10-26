@@ -8,7 +8,7 @@ import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
 import { resolveAntModel, getAntModelOverrideConfig } from './model/antModels.js'
 import { getCanonicalName } from './model/model.js'
 import { isEnvTruthy } from './envUtils.js'
-import type { EffortLevel } from 'src/entrypoints/sdk/runtimeTypes.js'
+import { readPanelModelEffort } from '../kin/cacheTtl.js'
 
 export type { EffortLevel }
 
@@ -260,8 +260,10 @@ export function resolveAppliedEffort(
   if (envOverride === null) {
     return undefined
   }
+  const panelEffort = readPanelModelEffort(model)
+  if (panelEffort === 'off') return undefined
   const resolved =
-    envOverride ?? appStateEffortValue ?? getDefaultEffortForModel(model)
+    envOverride ?? appStateEffortValue ?? panelEffort ?? getDefaultEffortForModel(model)
   if (resolved === 'max' && !modelSupportsMaxEffort(model)) {
     return 'high'
   }

@@ -44,6 +44,7 @@ import {
 } from '../../constants/prompts.js'
 import {
   readPanelCachedMicrocompactEnabled,
+  readPanelModelEffort,
 } from '../../kin/cacheTtl.js'
 import { mergeOfficialExtraBetas } from '../../kin/officialBetas.js'
 import { assembleMessageRequest } from './requestBody.js'
@@ -490,7 +491,7 @@ function should1hCacheTTL(querySource?: QuerySource): boolean {
  * Configure effort parameters for API request.
  *
  */
-function configureEffortParams(
+export function configureEffortParams(
   effortValue: EffortValue | undefined,
   outputConfig: BetaOutputConfig,
   extraBodyParams: Record<string, unknown>,
@@ -1846,9 +1847,16 @@ async function* queryModel(
         typeof options.wireBody.output_config === 'object' &&
         'effort' in options.wireBody.output_config
       )
-      // Official --print sends medium when the request omits effort.
+      const panelEffort = readPanelModelEffort(options.model)
+      // A panel value wins over the official omitted→medium fallback.
+      // `off` sends no effort parameter.
+      const appliedEffort = callerSetEffort
+        ? effort
+        : panelEffort === 'off'
+          ? undefined
+          : panelEffort ?? effort ?? 'medium'
       configureEffortParams(
-        callerSetEffort ? effort : effort ?? 'medium',
+        appliedEffort,
         outputConfig,
         extraBodyParams,
         betasParams,

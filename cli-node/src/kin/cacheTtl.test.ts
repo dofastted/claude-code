@@ -2,6 +2,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from 'bun:test'
+import { resolveAppliedEffort } from '../utils/effort.ts'
+import { configureEffortParams } from '../services/api/claude.ts'
+import { assembleMessageRequest } from '../services/api/requestBody.ts'
 import {
   applyKinOwnedCacheMarkers,
   fillMissingCacheTtl,
@@ -12,6 +15,7 @@ import {
   readPanelCacheTtl,
   readPanelCchEnabled,
   readPanelCcEntrypoint,
+  readPanelModelEffort,
   resolveKinCacheTtl,
 } from './cacheTtl.ts'
 
@@ -130,6 +134,98 @@ test('panel cc_entrypoint hot reloads and rejects anything except cli', () => {
     writeFileSync(path, '{')
     expect(readPanelCcEntrypoint(path)).toBe('sdk-cli')
   } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('panel model effort hot reloads high and off', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'model-effort-'))
+  const path = join(dir, 'kernel.json')
+  try {
+    writeFileSync(path, JSON.stringify({ model_effort: { 'claude-haiku-5-5': 'high' } }))
+    expect(readPanelModelEffort('claude-haiku-5-5', path)).toBe('high')
+    writeFileSync(path, JSON.stringify({ model_effort: { 'claude-haiku-5-5': 'off' } }))
+    expect(readPanelModelEffort('claude-haiku-5-5', path)).toBe('off')
+    writeFileSync(path, JSON.stringify({ model_effort: { 'claude-haiku-5-5': 'huge' } }))
+    expect(readPanelModelEffort('claude-haiku-5-5', path)).toBeUndefined()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('panel high and off override the native model default', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'applied-effort-'))
+  const path = join(dir, 'kernel.json')
+  const previous = process.env.KERNEL_CONFIG
+  process.env.KERNEL_CONFIG = path
+  try {
+    writeFileSync(path, JSON.stringify({ model_effort: { 'claude-haiku-5-5': 'high' } }))
+    expect(resolveAppliedEffort('claude-haiku-5-5', undefined)).toBe('high')
+    writeFileSync(path, JSON.stringify({ model_effort: { 'claude-haiku-5-5': 'off' } }))
+    expect(resolveAppliedEffort('claude-haiku-5-5', undefined)).toBeUndefined()
+  } finally {
+    if (previous == null) delete process.env.KERNEL_CONFIG
+    else process.env.KERNEL_CONFIG = previous
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('panel high and off reach the final API body', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'api-effort-'))
+  const path = join(dir, 'kernel.json')
+  const previous = process.env.KERNEL_CONFIG
+  process.env.KERNEL_CONFIG = path
+  try {
+    for (const [effort, expected] of [
+      ['high', 'high'],
+      ['off', undefined],
+    ] as const) {
+      writeFileSync(path, JSON.stringify({ model_effort: { 'claude-haiku-5-5': effort } }))
+      const resolved = resolveAppliedEffort('claude-haiku-5-5', undefined)
+      const outputConfig: { effort?: string } = {}
+      const panel = effort
+      const applied = panel === 'off' ? undefined : panel ?? resolved ?? 'medium'
+      configureEffortParams(applied, outputConfig, {}, [], 'claude-haiku-5-5')
+      expect(outputConfig.effort).toBe(expected)
+    }
+  } finally {
+    if (previous == null) delete process.env.KERNEL_CONFIG
+    else process.env.KERNEL_CONFIG = previous
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('assembled API body contains high and omits off', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'assembled-effort-'))
+  const path = join(dir, 'kernel.json')
+  const previous = process.env.KERNEL_CONFIG
+  process.env.KERNEL_CONFIG = path
+  try {
+    writeFileSync(path, JSON.stringify({ model_effort: { 'claude-haiku-5-5': 'high' } }))
+    const highConfig: { effort?: string } = {}
+    const highResolved = resolveAppliedEffort('claude-haiku-5-5', undefined)
+    configureEffortParams(highResolved, highConfig, {}, [], 'claude-haiku-5-5')
+    const highBody = assembleMessageRequest({
+      model: 'claude-haiku-5-5',
+      messages: [{ role: 'user', content: 'pong' }],
+      outputConfig: highConfig,
+    })
+    expect(highBody.output_config).toEqual({ effort: 'high' })
+
+    writeFileSync(path, JSON.stringify({ model_effort: { 'claude-haiku-5-5': 'off' } }))
+    const offConfig: { effort?: string } = {}
+    const offResolved = resolveAppliedEffort('claude-haiku-5-5', undefined)
+    const applied = offResolved
+    configureEffortParams(applied, offConfig, {}, [], 'claude-haiku-5-5')
+    const offBody = assembleMessageRequest({
+      model: 'claude-haiku-5-5',
+      messages: [{ role: 'user', content: 'pong' }],
+      outputConfig: offConfig,
+    })
+    expect(offBody.output_config).toBeUndefined()
+  } finally {
+    if (previous == null) delete process.env.KERNEL_CONFIG
+    else process.env.KERNEL_CONFIG = previous
     rmSync(dir, { recursive: true, force: true })
   }
 })

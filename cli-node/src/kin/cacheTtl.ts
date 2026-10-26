@@ -139,6 +139,26 @@ export function readPanelCcEntrypoint(path = kernelConfigPath()): CcEntrypoint {
   }
 }
 
+const PANEL_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'xhigh', 'max'])
+
+/** Panel model effort. `off` means send no effort; an unknown value is ignored. */
+export function readPanelModelEffort(model: string, path = kernelConfigPath()): string | undefined {
+  const id = String(model || '').trim().toLowerCase()
+  if (!id) return undefined
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !('model_effort' in parsed)) {
+      return undefined
+    }
+    const table = parsed.model_effort
+    if (!table || typeof table !== 'object' || Array.isArray(table)) return undefined
+    const value = table[id]
+    return typeof value === 'string' && PANEL_EFFORTS.has(value) ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
 
 export function resolveKinCacheTtl(opts: {
   system?: unknown
