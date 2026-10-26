@@ -1907,7 +1907,7 @@ async function* queryModel(
       if (hadThinking) options.wireThinking = options.wireBody.thinking
       if (hadChoice) options.toolChoice = options.wireBody.tool_choice as typeof options.toolChoice
       if (hadTools) allTools.splice(0, allTools.length, ...((options.wireBody.tools as BetaToolUnion[]) || []))
-      if (!outputConfig.effort) outputConfig.effort = 'medium'
+      if (!outputConfig.effort && modelSupportsEffort(options.model)) outputConfig.effort = 'medium'
       thinking = options.wireThinking as BetaMessageStreamParams['thinking']
     } else if (hasThinking && modelSupportsThinking(options.model)) {
       let useAdaptive = modelSupportsAdaptiveThinking(options.model)

@@ -410,28 +410,28 @@ export function getDefaultEffortForModel(
   // IMPORTANT: Do not change the default effort level without notifying
   // the model launch DRI and research. Default effort is a sensitive setting
   // that can greatly affect model quality and bashing.
+  // 2.1.303 catalog defaults. Only models whose capability set includes
+  // effort. Haiku 4.5 lists medium but rejects the parameter. Match the id,
+  // not getCanonicalName: mythos has no canonical entry.
+  const id = model.toLowerCase()
+  const catalogDefault: Array<[string, EffortLevel]> = [
+    ['haiku-5', 'medium'],
+    ['sonnet-5-5', 'medium'],
+    ['sonnet-5', 'high'],
+    ['sonnet-4-6', 'high'],
+    ['opus-5-5', 'medium'],
+    ['opus-5', 'high'],
+    ['opus-4-8', 'high'],
+    ['opus-4-7', 'xhigh'],
+    ['opus-4-6', 'xhigh'],
+    ['fable-5-1', 'high'],
+    ['fable-5', 'high'],
+    ['mythos-5-1', 'high'],
+  ]
+  const matched = catalogDefault.find(([needle]) => id.includes(needle))
+  if (matched) return matched[1]
 
-  if (
-    model.toLowerCase().includes('sonnet-5-5') ||
-    model.toLowerCase().includes('opus-5-5') ||
-    model.toLowerCase().includes('haiku-5')
-  ) {
-    return 'medium'
-  }
 
-  // Default effort on Opus 4.6 to medium for Pro.
-  // Max/Team also get medium when the tengu_grey_step2 config is enabled.
-  if (model.toLowerCase().includes('opus-4-6')) {
-    if (isProSubscriber()) {
-      return 'medium'
-    }
-    if (
-      getOpusDefaultEffortConfig().enabled &&
-      (isMaxSubscriber() || isTeamSubscriber())
-    ) {
-      return 'medium'
-    }
-  }
 
   // When ultrathink feature is on, default effort to medium (ultrathink bumps to high)
   if (isUltrathinkEnabled() && modelSupportsEffort(model)) {

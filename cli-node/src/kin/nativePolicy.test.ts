@@ -94,9 +94,9 @@ test('Opus and Sonnet 5.5 rewrite legacy thinking and forced tool choice', async
   ])
 })
 
-test('missing native effort is medium and explicit sampling fields stay', async () => {
+test('unsupported native effort stays omitted and explicit sampling fields stay', async () => {
   const missing = await capture({ model: 'claude-sonnet-4-5' })
-  expect(missing?.output_config).toEqual({ effort: 'medium' })
+  expect(missing?.output_config).toBeUndefined()
   const explicit = await capture({
     model: 'claude-sonnet-4-5',
     output_config: { effort: 'high' },
@@ -110,6 +110,27 @@ test('missing native effort is medium and explicit sampling fields stay', async 
   expect(explicit?.top_p).toBe(0.8)
   expect(explicit?.top_k).toBe(12)
   expect(explicit?.context_management).toEqual({ edits: [] })
+})
+
+test('native omitted effort uses the catalog default on the assembled body', async () => {
+  const cases: Array<[string, string | undefined]> = [
+    ['claude-sonnet-5', 'high'],
+    ['claude-opus-5', 'high'],
+    ['claude-opus-4-8', 'high'],
+    ['claude-opus-4-6', 'high'],
+    ['claude-opus-4-7', 'xhigh'],
+    ['claude-haiku-5-5', 'medium'],
+    ['claude-sonnet-5-5', 'medium'],
+    ['claude-opus-5-5', 'medium'],
+    ['claude-fable-5', 'high'],
+    ['claude-mythos-5-1', 'high'],
+    ['claude-haiku-4-5', undefined],
+    ['claude-sonnet-4-5', undefined],
+  ]
+  for (const [model, effort] of cases) {
+    const body = await capture({ model })
+    expect(body?.output_config?.effort).toBe(effort)
+  }
 })
 
 test('omitted native sampling fields stay omitted', async () => {
