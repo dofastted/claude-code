@@ -1,6 +1,6 @@
-import { chmodSync } from 'fs'
+import { chmodSync, existsSync } from 'fs'
 import { join } from 'path'
-import { getClaudeConfigHomeDir } from '../envUtils.js'
+import { getClaudeConfigHomeDir, isEnvTruthy } from '../envUtils.js'
 import { getErrnoCode } from '../errors.js'
 import { getFsImplementation } from '../fsOperations.js'
 import {
@@ -10,10 +10,26 @@ import {
 } from '../slowOperations.js'
 import type { SecureStorage, SecureStorageData } from './types.js'
 
+/**
+ * Host refresher owns `credentials.json`. The official CLI name is
+ * `.credentials.json`. Under CLAUDE_CODE_HOST_REFRESH those must be the
+ * same grant: prefer the host file when it exists, and never unlink it.
+ * A sibling `.credentials.json` with an older RT is what gets refreshed
+ * twice and comes back revoked.
+ */
+export function credentialStorageFileName(): string {
+  if (!isEnvTruthy(process.env.CLAUDE_CODE_HOST_REFRESH)) return '.credentials.json'
+  try {
+    if (existsSync(join(getClaudeConfigHomeDir(), 'credentials.json'))) return 'credentials.json'
+  } catch {
+    // Fall through to the official name.
+  }
+  return '.credentials.json'
+}
+
 function getStoragePath(): { storageDir: string; storagePath: string } {
   const storageDir = getClaudeConfigHomeDir()
-  const storageFileName = '.credentials.json'
-  return { storageDir, storagePath: join(storageDir, storageFileName) }
+  return { storageDir, storagePath: join(storageDir, credentialStorageFileName()) }
 }
 
 export const plainTextStorage = {
@@ -68,7 +84,9 @@ export const plainTextStorage = {
     }
   },
   delete(): boolean {
-    // sync IO: called from sync context (SecureStorage interface)
+    // Host owns this file. Unlinking it, then saving a new grant beside it,
+    // leaves the refresher holding the RT Anthropic already replaced.
+    if (isEnvTruthy(process.env.CLAUDE_CODE_HOST_REFRESH)) return true
     const { storagePath } = getStoragePath()
     try {
       getFsImplementation().unlinkSync(storagePath)
