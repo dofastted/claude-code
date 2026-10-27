@@ -669,3 +669,13 @@ CLI 原请求作为 `wireBody` 保留，在最终 SDK params（含自产 cache m
 - 浏览器用真实 ELF fixture 经 SQLite 投影的日志数据验证编译后的日志列表、概览、性能页：列表1816 tok/s、详情1815.8 tok/s为各自精度的同一值，TTFB82/TTFT302/窗口342/收尾251ms，write20，总tokens1621；另用未测历史边界数据确认没有 tok/s、未知写入显示 `-`。桌面与390px视口可读、页面无异常。账号/上游响应为 fixture，不是生产 Anthropic/OpenAI 账号验证；一次性脚本、日志数据和预览服务已移除/停止。
 - 格式化：仅本次 15 个 JS 文件用 Biome、10 个前端文件用项目 Prettier 配置、2 个 Go 文件用 gofmt；格式检查通过，32 个相关文件均 UTF-8 无 BOM、LF，无非 UTF-8 转码。Markdown/SQL 未配置项目格式化器，保持原风格；未全仓格式化。格式后 API 定向 8/8、前端行为 26/26、TypeScript 和 API-kernel race 检查通过，Node 271 项中 4 个既有失败见上；构建产物、忽略的 Trellis spec 不纳入主仓提交。
 - 主仓按逻辑单元本地提交：`875bd5e9`（API SSE flush）、`ed28e083`（协议 token 口径）、`e505bc22`（日志实测时序与实际用量）。本私有仓只提交本节，保留已有认证源码、旧运维记录及其他 WIP 不动；未 push、发布或部署。上线需 Node + web + 新 API-kernel，启动应用迁移043并重启相关控制面/API进程；不用 `fetch:payload`、`wrap-cli/sync` 或重建槽，不覆盖 routing/VM/凭证/SQLite。公共 CHANGELOG、PANEL_API 和本机 billing spec 已同步。
+
+## 2026-10-28 v1.4.020 部署 HostDzire（从 1.4.015）
+
+- 来源：Release `v1.4.020`（Latest）= `d556caa25c127ff7756d332918bcfea75040606a`；同名还有一个 Draft，未使用。部署前线上 320 个 `src/server.mjs`+`src/lib` 文件与 `v1.4.015` 逐个一致，无热补丁漂移；015→020 改 19 个源文件，新增迁移 045（JEV 用量），`package*.json` 不变，未装依赖。
+- 打包：干净 worktree + `stage-release.sh` + `pack-overlay.sh`，payload `payload-2026.10.28-cli-host-cred` 15 文件哈希通过。overlay SHA256 `a8b47ad3fba07f2a117a302265a9e78945344b1430e2cdf78c269d27490d3148`（119414587 字节）。唯一 ELF 变化：cli-node `f29bbfa4… → 49757637…`（宿主凭证路径 + sandbox 桩）；kernel `8f1347cc…`、kin-worker `d6b29f11…`、kin-api-kernel `43732a59…` 等不变。
+- apply：备份 `/opt/vm2api/.deploy-bak-vm2api-1.4.020-20261027T195024Z`，`SLOT_SYNC=required`。Node 只重启一次（PID 1293388，19:50:26 UTC，NRestarts=0），Go 前门 PID 996741 未动。
+- 槽同步：**不调用无 `ids` 的 `wrap-cli/sync`**——它会对集群槽走 `refreshCluster(recreate:true)`（10-23 aws-jp 重建/MAC 变更同一路径）。用一次性脚本逐槽等 inflight/queue 连续 3 次为 0，再 `{"restart":true,"ids":[单个]}`。vm-03、vm-13、bloat-ranges（19:54）、vm-10（20:04）完成，槽内 cli-node 均为 `49757637…`；这 4 个容器 ID 不变，但 StartedAt 变了（sync 重启了容器，不是 rm）。
+- **未完成**：loutish-arches 部署期间 inflight 一直为 1（>1 小时），两次等待均超时，未强制重启；仍跑旧 cli-node `f29bbfa4…`。其 VM 记录有 `kernel_restart_pending: start_failed`，文件 mtime 16:05 UTC，早于本次部署，属既有状态。集群槽 jp-pro2、minuet、sahlken、vm-19、vm-22 刻意未同步（仍是镜像 `d9b6af639092`）；kin-01、kin-codex-01 不在 sync 范围。
+- verify-live `1.4.020 --auth-mode master --container-policy baseline` exit 0，7 项全 PASS：version/面板 1.4.020、health 200、12 VM、公网页面、7/7 容器身份不变、真实 200 pong。vm-03/vm-13/bloat-ranges 原本就不可调度（手动关闭/organization_disabled），与本次无关。
+- 清理：远端上传包、apply 脚本、探针目录已删；备份保留。本地 worktree 已删并 prune。
