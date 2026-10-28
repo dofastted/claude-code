@@ -679,3 +679,15 @@ CLI 原请求作为 `wireBody` 保留，在最终 SDK params（含自产 cache m
 - **未完成**：loutish-arches 部署期间 inflight 一直为 1（>1 小时），两次等待均超时，未强制重启；仍跑旧 cli-node `f29bbfa4…`。其 VM 记录有 `kernel_restart_pending: start_failed`，文件 mtime 16:05 UTC，早于本次部署，属既有状态。集群槽 jp-pro2、minuet、sahlken、vm-19、vm-22 刻意未同步（仍是镜像 `d9b6af639092`）；kin-01、kin-codex-01 不在 sync 范围。
 - verify-live `1.4.020 --auth-mode master --container-policy baseline` exit 0，7 项全 PASS：version/面板 1.4.020、health 200、12 VM、公网页面、7/7 容器身份不变、真实 200 pong。vm-03/vm-13/bloat-ranges 原本就不可调度（手动关闭/organization_disabled），与本次无关。
 - 清理：远端上传包、apply 脚本、探针目录已删；备份保留。本地 worktree 已删并 prune。
+
+## 2026-10-28 v1.4.023 部署 HostDzire（从 1.4.020）
+
+- 来源：Release `v1.4.023` = `06e5a0be1d89cd74e0f60f12f44646179ab1977b`（含 1.4.021 #795、1.4.022 agent-id 头与 #800、1.4.023 #791 / #797）。部署前线上 323 个 `src/server.mjs`+`src/lib` 文件与 `v1.4.020` 逐个一致，无热补丁漂移；`package*.json` 不变，未装依赖。
+- 打包：干净 worktree + `stage-release.sh` + `pack-overlay.sh`，payload `payload-2026.10.28-kernel-agent-id` 15 文件哈希通过。overlay SHA256 `b2de62ef8fa5f3d5fda1c6acef2317c63096eb6ccb21214e9d4e801ad3686da4`（119474488 字节）。唯一 ELF 变化：kin-kernel `8f1347cc… → 8a61aaa3…`（`bin/kin-kernel` 与 `share/wrap-cli/kin-kernel.bin` 同一份）；cli-node `49757637…`、codex-kernel `0ffec538…`、kin-worker `d6b29f11…` 不变。
+- `stage-release.sh` 首跑在 `fetch-payload.mjs` 处 `fetch failed / other side closed`：Node 的 `NODE_USE_ENV_PROXY` 只认 `http(s)_proxy`，不认 `ALL_PROXY=socks5h://…`。本机 10808 是混合端口，导出 `https_proxy=http://127.0.0.1:10808`（及大小写变体）后重跑通过。
+- apply：备份 `/opt/vm2api/.deploy-bak-vm2api-1.4.023-20261028T081953Z`，`SLOT_SYNC=required`。Node 只重启一次（PID 2803432，08:19:55 UTC，NRestarts=0），Go 前门 PID 996741 未动。迁移 046、047 于 08:19:56 应用，`usage_logs.upstream_service_tier` 列存在。槽同步前 verify-live 8 项全 PASS。
+- 槽同步：同 1.4.020，不调用无 `ids` 的 sync；逐槽等 `inflight` / `conc_waiting` 连续 3 次为 0，再 `{"restart":true,"ids":[单个]}`。顺序 vm-03（08:23:25）、vm-13（08:23:37）、bloat-ranges、vm-10（08:23:59）、loutish-arches（08:30:51）。5 个本机 Anthropic 槽运行中的 `kin-kernel.bin` 均为 `8a61aaa3…`，无 `kernel_restart_pending`；kin-03 / 13 / 10 / loutish 容器 ID 不变（StartedAt 变）。本地 `ssh_execute` 在远端脚本结束后未返回，逐槽 JSON 未取回，以 StartedAt 与 `/proc` 内核哈希为准。
+- bloat-ranges 容器 `07234a2db5c0 → cd92ab015af0`（Created 08:49:07 UTC），非部署所致：nginx 同时段记录面板操作 08:49:10 `POST /api/panel/proxies/px-ac18b1b7/bind`（换代理重建容器），随后重新 OAuth（generate-auth-url / exchange-code 两轮）、08:53:25 `schedulable`、test-chat ×2、08:59:23 `PATCH`。VM 记录 `proxy.id` 已是 `px-ac18b1b7`，顶层 `proxy_id` 仍为旧值 `px-a45794f2`（未处理）。新容器同为 kernel `8a61aaa3…`，现为可调度（操作员开回）。
+- 最终 verify-live `1.4.023 --before /tmp/kin-before-1.4.023.txt --auth-mode master` exit 1：version/面板 1.4.023、health 200、12 VM、公网页面、7/7 Up、真实 200 pong 均 PASS；`docker_identity_state` 6/7 FAIL，唯一变化即上条操作员换代理引起的 bloat-ranges 重建。
+- 未覆盖：集群槽 jp-pro2、minuet、sahlken、vm-19、vm-22 刻意未同步（无 `ids` 的 sync 走 `refreshCluster(recreate:true)`），仍是部署前镜像（未逐槽核对哈希），不透传 `x-claude-code-agent-id`；kin-01、kin-codex-01 不在 sync 范围。部署后 71 条请求均为 `anthropic.messages`，`upstream_service_tier` 全为 NULL，#777 的 Codex 路径尚无线上真实流量验证。
+- 清理：远端上传包、apply 脚本、暂存助手目录已删；备份保留。本地 worktree 已删并 prune。
