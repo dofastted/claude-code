@@ -97,7 +97,9 @@ pub fn allowed_header(key: &str) -> bool {
             | "x-app"
             | "x-claude-code-session-id"
             | "x-claude-code-request-class"
+            | "x-claude-code-agent-id"
             | "x-claude-code-agent-type"
+            | "x-claude-code-parent-agent-id"
             | "x-claude-code-prev-tool-durations"
             | "x-claude-code-compaction"
             | "x-claude-code-context-compacted"
@@ -266,6 +268,9 @@ mod tests {
         assert!(allowed_header("anthropic-beta"));
         assert!(allowed_header("X-Stainless-Lang"));
         assert!(allowed_header("User-Agent"));
+        assert!(allowed_header("X-Claude-Code-Agent-Id"));
+        assert!(allowed_header("x-claude-code-parent-agent-id"));
+        assert!(!allowed_header(""));
     }
 
     #[test]
