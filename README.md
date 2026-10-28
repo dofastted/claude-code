@@ -691,3 +691,14 @@ CLI 原请求作为 `wireBody` 保留，在最终 SDK params（含自产 cache m
 - 最终 verify-live `1.4.023 --before /tmp/kin-before-1.4.023.txt --auth-mode master` exit 1：version/面板 1.4.023、health 200、12 VM、公网页面、7/7 Up、真实 200 pong 均 PASS；`docker_identity_state` 6/7 FAIL，唯一变化即上条操作员换代理引起的 bloat-ranges 重建。
 - 未覆盖：集群槽 jp-pro2、minuet、sahlken、vm-19、vm-22 刻意未同步（无 `ids` 的 sync 走 `refreshCluster(recreate:true)`），仍是部署前镜像（未逐槽核对哈希），不透传 `x-claude-code-agent-id`；kin-01、kin-codex-01 不在 sync 范围。部署后 71 条请求均为 `anthropic.messages`，`upstream_service_tier` 全为 NULL，#777 的 Codex 路径尚无线上真实流量验证。
 - 清理：远端上传包、apply 脚本、暂存助手目录已删；备份保留。本地 worktree 已删并 prune。
+
+## 2026-10-28 aws-jp 集群槽内核原地更新到 1.4.023（不重建容器）
+
+- 范围：节点 `node-7b55028e` 上 4 个有容器的槽 jp-pro2、vm-19、vm-22、minuet。sahlken 记录为 stopped / no_credential，节点上没有容器，无可换；下次启动由控制面按当前 payload 建镜像，自带新内核。旧的 `*-legacy-*`、`*-pre-*` 回滚容器未动。
+- 目标：kin-kernel.bin `8a61aaa3…`（4 槽）；cli-node `cb2f8fb9… → 49757637…`（jp-pro2、vm-19，与 1.4.023 payload 及 vm-22 / minuet 现值一致）。wrapper `b9accdf6…`、glibc loader `cd4df4f3…` 不变。文件取自本地 `share/wrap-cli`，与 `v1.4.023` 的 `deploy/payload.json` SHA256 一致，上传后节点再核一次。
+- 方法：节点 Docker 29.8.1 + containerd 快照，容器 `ReadonlyRootfs=true`，内核是 PID 1，必须重启容器才能换。逐槽：停容器（`-t 5`）→ 断开再接回唯一网络并显式指定原 MAC 与 IP → 把新文件原子写入该容器自己的 overlay upperdir `opt/kin/`（镜像层不动，属主 / 权限照 lower）→ 启动 → 补起 kin-worker telemetry 旁路。每槽停机约 1 秒。
+- 为什么要钉 MAC：节点上一次性测试容器证实，这些网络的端点没有 `DesiredMacAddress`，`docker stop/start` 或 `restart` 都会换随机 MAC（IP、upperdir、容器 ID 不变）；槽内身份读取在没有 `/etc/kin-hardware/mac` 时取 `/sys/class/net` 的 MAC。停机时用 Engine API `POST /networks/<net>/connect` 带 `MacAddress` + `IPAMConfig.IPv4Address` 接回，测试确认之后 start / restart / stop-start 都保持原 MAC 与 IP，且写入 `DesiredMacAddress`。四槽现在都已钉住（本机 HostDzire 槽原本就是钉住的）。
+- 顺序与排空：jp-pro2（paused / oauth_revoked，作金丝雀）→ vm-19（同）→ vm-22 → minuet；后两个先在控制面等 inflight / conc_waiting 连续 3 次为 0（各约 4 秒）。没有调用 `wrap-cli/sync`（集群槽走 `refreshCluster(recreate:true)`）。停机远短于看门狗首次复活前的 60 秒退避，看门狗日志无记录。
+- 结果：4 槽容器 ID、网络 MAC/IP、upperdir、PID 1 命令全部不变；PID 1 映射 `/opt/kin/kin-kernel.bin` 为 `8a61aaa3…`，无 deleted 映射；`kernel.sock` 重建；kin-worker 旁路各 1 个。控制面 diagnose：vm-22、minuet 九项全 ok（kernel ready），真实 test-chat `claude-haiku-4-5` 均 200 `pong`；jp-pro2、vm-19 仅 record（paused）与 credential（oauth_revoked）报错，是更新前就有的状态，kernel ready_slots=20。5 个 VM 的 status / schedulable / schedule_manual / schedule_disabled_reason 与更新前逐项一致。
+- 备份：节点 `/home/ubuntu/vm2api-bak-1.4.023-kernel-<容器名>-20261028T09*`（0700），含 before.json / after.json、去掉 Env 的 container.json。回滚：节点上 `swap.py rollback <容器名> <备份目录>`（停容器、删掉写入的 upper 文件、启动，镜像层原文件重新生效；MAC 钉住保留）。脚本已随临时目录删除，回滚时按此逻辑重写即可。
+- 注意：这些修改在容器自己的可写层里，**容器被重建就会消失**；控制面重建时会按当前 payload 构建新镜像，同样是新内核，不会回退。`slot-bin`（挂到 `/opt/kin-live`）里旧的 cli-node / kin-kernel.bin 副本和中断推送留下的 `.kin-*.tmp` 未被任何进程引用，未清理。
