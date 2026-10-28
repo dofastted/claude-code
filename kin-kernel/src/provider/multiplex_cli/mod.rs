@@ -12,6 +12,7 @@ pub mod native_protocol;
 pub mod scheduler;
 pub mod slot;
 pub mod supervisor;
+pub mod telemetry;
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -219,6 +220,8 @@ pub struct Runtime {
     closed_count: AtomicUsize,
     me: Weak<Runtime>,
     frame_gate: Mutex<()>,
+    telemetry: Mutex<telemetry::TelemetryTracking>,
+    telemetry_submissions: Arc<tokio::sync::Semaphore>,
     /// Bumped per CLI process; frames and exits of an older process are ignored.
     host_gen: AtomicU64,
     child_kill: Mutex<Option<oneshot::Sender<()>>>,
@@ -462,6 +465,10 @@ impl Runtime {
             me: me.clone(),
             host_gen: AtomicU64::new(0),
             frame_gate: Mutex::new(()),
+            telemetry: Mutex::new(telemetry::TelemetryTracking::default()),
+            telemetry_submissions: Arc::new(tokio::sync::Semaphore::new(
+                telemetry::MAX_PENDING_ACKS,
+            )),
             child_kill: Mutex::new(None),
             epoch: Instant::now(),
             last_frame_ms: AtomicU64::new(0),
@@ -485,6 +492,10 @@ impl Runtime {
         let generation = {
             let _gate = self.frame_gate.lock().await;
             let generation = self.host_gen.fetch_add(1, Ordering::AcqRel) + 1;
+            self.clear_telemetry().await;
+            *self.native_host.lock().await = None;
+            self.classifier_context_supported
+                .store(false, Ordering::Relaxed);
             self.note_frame();
             self.host_unavailable.store(false, Ordering::Release);
             generation
@@ -766,7 +777,7 @@ impl Runtime {
             self.cfg.simulate_latency,
             self.cfg.desired_config_hash.clone(),
         ));
-        bootstrap::wait_ready(self, self.cfg.slot_count, Duration::from_secs(5)).await
+        self.wait_host_ready(Duration::from_secs(5)).await
     }
 
     async fn start_claude(self: &Arc<Self>, generation: u64) -> Result<(), KernelError> {
@@ -848,7 +859,20 @@ impl Runtime {
         });
         tracing::info!(pid = supervised.pid, "claude supervisor alive");
         let wait = Duration::from_secs((120 + 8 * self.cfg.slot_count as u64).min(240));
-        bootstrap::wait_ready(self, self.cfg.slot_count, wait).await
+        self.wait_host_ready(wait).await
+    }
+
+    async fn wait_host_ready(&self, max_wait: Duration) -> Result<(), KernelError> {
+        tokio::time::timeout(max_wait, async {
+            loop {
+                if !self.host_unavailable() && self.native_host.lock().await.is_some() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .map_err(|_| KernelError::Provider("timed out waiting for native host readiness".into()))
     }
 
     pub fn ready_slots(&self) -> usize {
@@ -876,6 +900,7 @@ impl Runtime {
         if first {
             tracing::error!(%reason, "native cli host unavailable");
         }
+        self.clear_telemetry().await;
         self.pid.store(0, Ordering::Relaxed);
         self.memory.set_claude_pid(0);
         self.ready.store(0, Ordering::Relaxed);
@@ -1173,6 +1198,12 @@ impl Runtime {
                         .any(|cap| cap == native_protocol::CAP_CLASSIFIER),
                     Ordering::Relaxed,
                 );
+                self.telemetry_capability(
+                    capabilities
+                        .iter()
+                        .any(|cap| cap == native_protocol::CAP_VM_TELEMETRY),
+                )
+                .await;
                 *self.native_host.lock().await = Some(NativeHostInfo {
                     protocol_version,
                     slots,
@@ -1293,6 +1324,16 @@ impl Runtime {
                     *probe = None;
                 }
             }
+            native_protocol::StdoutFrame::TelemetryAck {
+                request_id,
+                ok,
+                error,
+            } => {
+                self.telemetry_ack(request_id, ok, error).await;
+            }
+            native_protocol::StdoutFrame::TelemetryState { state } => {
+                self.telemetry_state(state).await;
+            }
         }
     }
 
@@ -1371,12 +1412,25 @@ impl Runtime {
     /// Any failure here means the CLI cannot take input any more (closed
     /// pipe, or a pipe it stopped draining): restart it (L3).
     async fn write_cli_stdin(&self, frame: native_protocol::StdinFrame) -> Result<(), KernelError> {
+        self.write_cli_stdin_for_generation(frame, None).await
+    }
+
+    async fn write_cli_stdin_for_generation(
+        &self,
+        frame: native_protocol::StdinFrame,
+        generation: Option<u64>,
+    ) -> Result<(), KernelError> {
         self.host_available()?;
         let line = native_protocol::encode_stdin(&frame).map_err(KernelError::Provider)?;
         let limit = self.cfg.recovery.stdin_write_timeout;
         let write = async {
             use tokio::io::AsyncWriteExt;
             let mut guard = self.cli_stdin.lock().await;
+            if let Some(expected) = generation
+                && (self.host_gen.load(Ordering::Acquire) != expected || self.host_unavailable())
+            {
+                return Err("native cli generation replaced".to_string());
+            }
             let Some(stdin) = guard.as_mut() else {
                 return Err("native cli stdin closed".to_string());
             };
@@ -1394,7 +1448,11 @@ impl Runtime {
             Ok(Err(reason)) => reason,
             Err(_) => format!("native stdin write blocked for {}s", limit.as_secs()),
         };
-        self.request_restart(reason.clone()).await;
+        if let Some(generation) = generation {
+            self.host_lost(generation, reason.clone()).await;
+        } else {
+            self.request_restart(reason.clone()).await;
+        }
         Err(KernelError::Job(JobFailure::kernel_unavailable(reason)))
     }
 
@@ -2021,6 +2079,17 @@ async fn simulated_cli(
                 let _ =
                     write_sim_frame(&writer, &native_protocol::StdoutFrame::Pong { nonce }).await;
             }
+            native_protocol::StdinFrame::TelemetryEvent { request_id, .. } => {
+                let _ = write_sim_frame(
+                    &writer,
+                    &native_protocol::StdoutFrame::TelemetryAck {
+                        request_id,
+                        ok: false,
+                        error: None,
+                    },
+                )
+                .await;
+            }
         }
     }
 }
@@ -2350,6 +2419,31 @@ impl MultiplexCliProvider {
         match self.runtime.get() {
             Some(runtime) => runtime.cancel_request(request_id).await,
             None => false,
+        }
+    }
+
+    pub async fn submit_telemetry(
+        &self,
+        event: telemetry::TelemetryEvent,
+    ) -> Result<Uuid, telemetry::TelemetryError> {
+        let runtime = self
+            .runtime
+            .get()
+            .ok_or(telemetry::TelemetryError::Unavailable)?;
+        runtime
+            .queue_telemetry(event)
+            .await?
+            .await
+            .map_err(|_| telemetry::TelemetryError::Unavailable)?
+    }
+
+    pub async fn telemetry_health(&self) -> Value {
+        match self.runtime.get() {
+            Some(runtime) => runtime.telemetry_health().await,
+            None => json!({
+                "vm_telemetry": false, "telemetry_ready": false, "telemetry": null,
+                "native_host": null, "capabilities": null,
+            }),
         }
     }
     async fn runtime(&self) -> Result<&Arc<Runtime>, KernelError> {

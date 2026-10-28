@@ -7,6 +7,7 @@
 
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { isTelemetryDisabled } from '../../utils/privacyLevel.js'
+import { isManagedTelemetryProcess } from '../../kin/vmTelemetryContract.js'
 
 /**
  * Check if analytics operations should be disabled
@@ -18,6 +19,7 @@ import { isTelemetryDisabled } from '../../utils/privacyLevel.js'
  */
 export function isAnalyticsDisabled(): boolean {
   return (
+    isManagedTelemetryProcess() ||
     process.env.NODE_ENV === 'test' ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK) ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX) ||

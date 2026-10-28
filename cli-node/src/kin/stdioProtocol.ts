@@ -1,3 +1,5 @@
+import type { TelemetryState } from './vmTelemetryContract.js'
+
 export const PROTOCOL_VERSION = 2
 export const CAPABILITIES = [
   'multi_slot',
@@ -6,6 +8,7 @@ export const CAPABILITIES = [
   // Answers ping from the stdin loop and acks every cancel.
   'ping',
   'classifier_request_context',
+  ...(process.platform === 'linux' ? ['vm_telemetry' as const] : []),
 ] as const
 
 export type StdinFrame =
@@ -18,6 +21,7 @@ export type StdinFrame =
     }
   | { type: 'cancel'; job_id: string; slot_id?: string }
   | { type: 'ping'; nonce: string }
+  | { type: 'telemetry_event'; request_id: string; event: unknown }
 
 export type StdoutFrame =
   | {
@@ -58,6 +62,8 @@ export type StdoutFrame =
     }
   | { type: 'cancel_ack'; job_id: string; slot_id: string }
   | { type: 'pong'; nonce: string }
+  | { type: 'telemetry_ack'; request_id: string; ok: boolean; error?: string }
+  | { type: 'telemetry_state'; state: TelemetryState }
 
 export function parseStdinLine(line: string): StdinFrame | null {
   const trimmed = line.trim()
@@ -65,7 +71,13 @@ export function parseStdinLine(line: string): StdinFrame | null {
   try {
     const parsed = JSON.parse(trimmed) as StdinFrame
     if (!parsed || typeof parsed.type !== 'string') return null
-    if (parsed.type !== 'job_start' && parsed.type !== 'cancel' && parsed.type !== 'ping') return null
+    if (
+      parsed.type !== 'job_start' &&
+      parsed.type !== 'cancel' &&
+      parsed.type !== 'ping' &&
+      parsed.type !== 'telemetry_event'
+    )
+      return null
     return parsed
   } catch {
     return null
@@ -96,7 +108,7 @@ function writeLine(line: string): Promise<void> {
       if (err) reject(err)
       else resolve()
     }
-    const ok = process.stdout.write(line, err => done(err))
+    const ok = process.stdout.write(line, (err) => done(err))
     if (!ok) process.stdout.once('drain', () => done())
   })
 }

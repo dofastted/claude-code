@@ -7,6 +7,7 @@
 //! `hello` handshake and no in-CLI tool parking (`tool_result`,
 //! `job_parked`) — those were protocol v1 relics.
 
+use super::telemetry::{SafeCode, TelemetryEvent, TelemetryState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -16,6 +17,7 @@ pub const CAPABILITIES: &[&str] = &["multi_slot", "native_sse", "stateless"];
 /// acks every `cancel`. Only such a host is probed for liveness.
 pub const CAP_PING: &str = "ping";
 pub const CAP_CLASSIFIER: &str = "classifier_request_context";
+pub const CAP_VM_TELEMETRY: &str = "vm_telemetry";
 
 /// Hard caps on CLI stdout: a single line longer than this is dropped, and a
 /// job whose cumulative stdout exceeds `MAX_JOB_BYTES` stops being decoded so
@@ -42,6 +44,11 @@ pub enum StdinFrame {
     },
     #[serde(rename = "ping")]
     Ping { nonce: String },
+    #[serde(rename = "telemetry_event")]
+    TelemetryEvent {
+        request_id: uuid::Uuid,
+        event: TelemetryEvent,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -97,6 +104,15 @@ pub enum StdoutFrame {
     CancelAck { job_id: String, slot_id: String },
     #[serde(rename = "pong")]
     Pong { nonce: String },
+    #[serde(rename = "telemetry_ack")]
+    TelemetryAck {
+        request_id: uuid::Uuid,
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<SafeCode>,
+    },
+    #[serde(rename = "telemetry_state")]
+    TelemetryState { state: TelemetryState },
 }
 
 pub fn encode_stdin(frame: &StdinFrame) -> Result<Vec<u8>, String> {
