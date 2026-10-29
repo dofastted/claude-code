@@ -86,11 +86,16 @@ export function parseStdinLine(line: string): StdinFrame | null {
 
 let writeChain: Promise<void> = Promise.resolve()
 let queuedBytes = 0
-const STDOUT_QUEUE_BYTES = 2 * 1024 * 1024
+/** Matches the kernel response ceiling. A config item with an image does not fit in 2 MiB. */
+export const STDOUT_QUEUE_BYTES = 64 * 1024 * 1024
+
+export function stdoutQueueAccepts(queued: number, lineBytes: number): boolean {
+  return queued >= 0 && lineBytes >= 0 && queued + lineBytes <= STDOUT_QUEUE_BYTES
+}
 
 export function writeStdout(frame: StdoutFrame): Promise<void> {
   const line = JSON.stringify(frame) + '\n'
-  if (queuedBytes + line.length > STDOUT_QUEUE_BYTES) {
+  if (!stdoutQueueAccepts(queuedBytes, line.length)) {
     return Promise.reject(new Error('stdout_backpressure'))
   }
   queuedBytes += line.length
