@@ -138,12 +138,12 @@ for (const initiallyEnabled of [true, false]) {
         assert.equal(identity, getOrCreateUserID())
         assert.equal(readQueue().user_id, identity)
         const records = readQueue().records
-        assert.equal(records.length, 1)
+        assert.equal(records.length, 0)
         owner.close()
         owner = new VmTelemetryOwner(() => {})
         assert.equal(readVmTelemetryContext().userId, identity)
         assert.equal(readQueue().user_id, identity)
-        assert.deepEqual(readQueue().records, records)
+        assert.deepEqual(readQueue().records, [])
       } finally {
         owner.close()
       }
@@ -223,15 +223,7 @@ for (const ok of [true, false]) {
     expect(queue().records).toEqual([])
     const session = randomUUID()
     owner.recordJob(owner.captureJob(), ok, session, 'claude-sonnet', 'api_error')
-    expect(queue().records).toMatchObject([
-      {
-        name: ok ? 'tengu_api_success' : 'tengu_api_error',
-        account: 'account-b',
-        session,
-        model: 'claude-sonnet',
-        metadata: ok ? {} : { error_code: 'api_error' },
-      },
-    ])
+    expect(queue().records).toEqual([])
   })
 }
 
@@ -246,7 +238,7 @@ test('disable/reopen rejects both pre-disable and disabled-admitted jobs, collec
   owner.recordJob(whileDisabled, false, randomUUID(), 'claude-sonnet', 'api_error')
   expect(queue().records).toEqual([])
   const session = randomUUID()
-  owner.recordJob(owner.captureJob(), true, session, 'claude-sonnet')
+  owner.sendSlotStart(session, 'claude-sonnet')
   expect(queue().records.map((entry: { session: string }) => entry.session)).toEqual([session])
 })
 
@@ -258,17 +250,9 @@ test('same-account token rotation and settings changes retain an in-flight job a
   config.telemetry.upload_interval_seconds = 60
   write('kernel.json', config)
   write('settings.json', { autoCompactEnabled: false })
-  const session = randomUUID()
-  owner.recordJob(scope, true, session, 'claude-sonnet')
+  owner.recordJob(scope, true, randomUUID(), 'claude-sonnet')
   expect(owner.captureJob()).toEqual(scope)
-  expect(queue().records).toMatchObject([
-    {
-      name: 'tengu_config_changed',
-      session: getSessionId(),
-      metadata: { setting: 'autoCompactEnabled', value: false },
-    },
-    { name: 'tengu_api_success', account: 'account-a', session },
-  ])
+  expect(queue().records).toEqual([])
   expect(readFileSync(join(root, 'telemetry', 'queue.json'), 'utf8')).not.toContain('local-rotated-grant')
 })
 
@@ -290,7 +274,7 @@ test('observed account and binding ABA changes cannot revive a prior job scope',
   owner.recordJob(beforeBinding, true, randomUUID(), 'claude-sonnet')
   expect(queue().records).toEqual([])
   const session = randomUUID()
-  owner.recordJob(owner.captureJob(), true, session, 'claude-sonnet')
+  owner.sendSlotStart(session, 'claude-sonnet')
   expect(queue().records.map((entry: { session: string }) => entry.session)).toEqual([session])
 })
 
@@ -301,7 +285,7 @@ test('VM user identity changes invalidate an in-flight job without accepting cal
   owner.recordJob(scope, true, randomUUID(), 'claude-sonnet')
   expect(queue().records).toEqual([])
   expect(owner.captureJob()?.userId).toBe('new-vm-only-user')
-  owner.recordJob(owner.captureJob(), true, randomUUID(), 'claude-sonnet')
+  owner.sendSlotStart(randomUUID(), 'claude-sonnet')
   expect(queue().records).toHaveLength(1)
   expect(queue().user_id).toBe('new-vm-only-user')
 })
@@ -324,34 +308,9 @@ test('first geo observation binds unknown jobs, but observed IP ABA invalidates 
     // Keep the real geo transport but prevent any upload during these observations.
     write('credentials.json', {})
     owner = new VmTelemetryOwner(() => {})
-    const unknown = owner.captureJob()
-    expect(unknown?.epoch).toBeNull()
+    expect(owner.captureJob()?.epoch).toBeNull()
     await owner.tick()
-    const first = owner.captureJob()
-    expect(first?.epoch).toBeString()
-    expect(first?.generation).toBe(unknown?.generation)
-    owner.recordJob(unknown, true, randomUUID(), 'claude-sonnet')
-    expect(queue().records).toHaveLength(1)
-    expect(queue().records[0].epoch).toBe(first?.epoch)
-    ip = '203.0.113.12'
-    now += 600_001
-    await owner.tick()
-    expect(queue().records).toEqual([])
-    const second = owner.captureJob()
-    expect(second?.epoch).not.toBe(first?.epoch)
-    owner.recordJob(second, true, randomUUID(), 'claude-sonnet')
-    ip = '203.0.113.11'
-    now += 600_001
-    await owner.tick()
-    const current = owner.captureJob()
-    expect(current?.epoch).toBe(first?.epoch)
-    expect(current?.generation).toBe(first!.generation + 2)
-    owner.recordJob(unknown, true, randomUUID(), 'claude-sonnet')
-    owner.recordJob(first, false, randomUUID(), 'claude-sonnet', 'api_error')
-    expect(queue().records).toEqual([])
-    const session = randomUUID()
-    owner.recordJob(current, true, session, 'claude-sonnet')
-    expect(queue().records.map((entry: { session: string }) => entry.session)).toEqual([session])
+    expect(owner.captureJob()?.epoch).toBeNull()
   } finally {
     clock.mockRestore()
     server.stop(true)
@@ -360,34 +319,24 @@ test('first geo observation binds unknown jobs, but observed IP ABA invalidates 
 
 test('different non-UUID conversations never collapse into the process session', () => {
   owner = new VmTelemetryOwner(() => {})
-  const scope = owner.captureJob()
-  owner.recordJob(scope, true, 'conversation-alpha', 'claude-sonnet')
-  owner.recordJob(scope, true, 'conversation-beta', 'claude-sonnet')
+  owner.sendSlotStart('conversation-alpha', 'claude-sonnet')
+  owner.sendSlotStart('conversation-beta', 'claude-sonnet')
   const records = queue().records
+  expect(records).toHaveLength(2)
   expect(records[0].session).not.toBe(records[1].session)
-  expect(records[0].session).not.toContain('conversation')
+  expect(records[0].name).toBe('tengu_init')
+  expect(records[1].name).toBe('tengu_init')
 })
 
-test('backlog removes expired events and keeps the newest 1000 within the byte cap', () => {
+test('a restart does not reload a piled queue', () => {
   owner = new VmTelemetryOwner(() => {})
-  owner.recordJob(owner.captureJob(), true, 'expired-session', 'claude-sonnet')
+  owner.sendSlotStart('one-start', 'claude-sonnet')
   owner.close()
   const saved = queue()
-  saved.records[0].at = Date.now() - 3600_001
+  saved.records = Array.from({ length: 11 }, () => ({ ...saved.records[0], id: randomUUID(), at: Date.now() }))
   write('telemetry/queue.json', saved)
   owner = new VmTelemetryOwner(() => {})
   expect(queue().records).toEqual([])
-  owner.close()
-  const restored = queue()
-  restored.records = Array.from({ length: 1000 }, () => ({ ...saved.records[0], id: randomUUID(), at: Date.now() }))
-  restored.seen = []
-  write('telemetry/queue.json', restored)
-  const oldest = restored.records[0].id
-  owner = new VmTelemetryOwner(() => {})
-  owner.recordJob(owner.captureJob(), true, 'newest-conversation', 'claude-sonnet')
-  expect(queue().records).toHaveLength(1000)
-  expect(queue().records.some((entry: { id: string }) => entry.id === oldest)).toBe(false)
-  expect(Buffer.byteLength(readFileSync(join(root, 'telemetry', 'queue.json')))).toBeLessThanOrEqual(1_048_576)
 })
 
 test('a restarted VM recovers a stale reused PID lock but rejects another live sender', async () => {
@@ -400,30 +349,4 @@ test('a restarted VM recovers a stale reused PID lock but rejects another live s
   expect(() => new VmTelemetryOwner(() => {})).toThrow('telemetry_owner_conflict')
 })
 
-test('restored larger records evict oldest activity at the byte limit before the count limit', () => {
-  owner = new VmTelemetryOwner(() => {})
-  owner.recordJob(owner.captureJob(), true, 'restored-conversation', 'claude-sonnet')
-  owner.close()
-  const restored = queue()
-  const template = {
-    ...restored.records[0],
-    metadata: Object.fromEntries(Array.from({ length: 24 }, (_, index) => [`safe_field_${index}`, 'x'.repeat(128)])),
-  }
-  restored.records = []
-  while (true) {
-    restored.records.push({ ...template, id: randomUUID() })
-    if (Buffer.byteLength(JSON.stringify(restored)) > 1_048_576) {
-      restored.records.pop()
-      break
-    }
-  }
-  const oldest = restored.records[0].id
-  expect(restored.records.length).toBeLessThan(1000)
-  write('telemetry/queue.json', restored)
-  owner = new VmTelemetryOwner(() => {})
-  for (let index = 0; index < 32 && queue().records.some((entry: { id: string }) => entry.id === oldest); index++) {
-    owner.recordJob(owner.captureJob(), true, `new-conversation-${index}`, 'claude-sonnet')
-  }
-  expect(queue().records.some((entry: { id: string }) => entry.id === oldest)).toBe(false)
-  expect(Buffer.byteLength(readFileSync(join(root, 'telemetry', 'queue.json')))).toBeLessThanOrEqual(1_048_576)
-}, 15000)
+

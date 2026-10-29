@@ -213,19 +213,7 @@ export class VmTelemetryOwner {
     mkdirSync(dirname(this.lockPath), { recursive: true, mode: 0o700 })
     this.acquire()
     const saved = readQueue(this.queuePath)
-    if (
-      saved &&
-      saved.vm_id === this.context.kernel.vm_id &&
-      saved.user_id === this.userId &&
-      saved.binding === this.binding
-    ) {
-      this.records = saved.records
-      this.attempts = new Map(saved.attempts)
-      this.seen = new Map(saved.seen)
-      this.epoch = saved.epoch
-      this.account = saved.account
-      this.nextSendAt = Number.isFinite(saved.next_send_at) ? saved.next_send_at : this.nextSendAt
-    }
+    if (saved && saved.vm_id === this.context.kernel.vm_id) this.epoch = saved.epoch
     this.synchronize()
     this.trim()
     this.persist()
@@ -268,7 +256,6 @@ export class VmTelemetryOwner {
       const event = managedEventFromAnalytics(name, metadata)
       if (event) await this.record(event)
     })
-    if (this.context.enabled) this.enqueue('tengu_init', {}, this.processSession)
     this.notify()
     this.poll = setInterval(() => {
       try {
@@ -329,11 +316,6 @@ export class VmTelemetryOwner {
       this.state.last_error = null
       this.settings = { ...next.safeSettings }
     } else {
-      for (const [setting, value] of Object.entries(next.safeSettings)) {
-        if (this.settings[setting] !== value) {
-          this.enqueue('tengu_config_changed', { setting, value }, this.processSession)
-        }
-      }
       this.settings = { ...next.safeSettings }
     }
     if (purge || changedBinding || changedAccount || changedUser || changedEnabled) this.persist()
@@ -484,22 +466,16 @@ export class VmTelemetryOwner {
     }
   }
 
-  recordJob(scope: VmJobTelemetryScope | null, ok: boolean, session: string, model: string, code?: string) {
+  recordJob() {}
+
+  sendSlotStart(session: string, model: string) {
     try {
       this.synchronize()
-      if (
-        !scope ||
-        scope.generation !== this.generation ||
-        scope.account !== this.account ||
-        scope.binding !== this.binding ||
-        scope.userId !== this.userId ||
-        (scope.epoch !== null && scope.epoch !== this.epoch)
-      )
-        return
-      const metadata: Record<string, string | number | boolean> =
-        !ok && code && /^[a-z][a-z0-9_]{0,63}$/.test(code) ? { error_code: code } : {}
-      this.enqueue(ok ? 'tengu_api_success' : 'tengu_api_error', metadata, session, true, randomUUID(), null, model)
-      this.notify()
+      if (!this.context.enabled || this.closed) return
+      this.enqueue('tengu_init', { phase: 'slot_start' }, session, true, randomUUID(), null, model)
+      this.nextSendAt = 0
+      this.retryProbeAt = 0
+      void this.tick()
     } catch (error) {
       this.failure(error)
     }
@@ -567,8 +543,7 @@ export class VmTelemetryOwner {
       this.epoch = snapshot.epoch
       for (const record of this.records)
         if (record.binding === this.binding && record.epoch === null) record.epoch = this.epoch
-      if (!this.context.validCredentials || !this.account || !this.context.userId || Date.now() < this.nextSendAt)
-        return
+      if (!this.context.validCredentials || !this.account || !this.context.userId) return
       // The authorization grant must agree with the recorded owner at the actual send.
       const batch = this.records
         .filter(
@@ -578,7 +553,7 @@ export class VmTelemetryOwner {
             record.binding === this.binding &&
             record.epoch === this.epoch,
         )
-        .slice(0, 200)
+        .slice(0, 1)
       if (!batch.length) return
       const context = this.context
       const logs = batch.map((record) => ({
@@ -594,7 +569,7 @@ export class VmTelemetryOwner {
         },
       })) as unknown as ReadableLogRecord[]
       const payload = this.exporter.serializeVmRecords(logs)
-      this.nextSendAt = Date.now() + context.interval
+      this.nextSendAt = 0
       this.persist()
       this.state.state = 'uploading'
       this.state.last_error = null
@@ -655,12 +630,6 @@ export function startVmTelemetry(publish: (state: TelemetryState) => void | Prom
 export function captureVmJob(): VmJobTelemetryScope | null {
   return owner?.captureJob() ?? null
 }
-export function recordVmJob(
-  scope: VmJobTelemetryScope | null,
-  ok: boolean,
-  session: string,
-  model: string,
-  code?: string,
-) {
-  owner?.recordJob(scope, ok, session, model, code)
+export function sendSlotStart(session: string, model: string) {
+  owner?.sendSlotStart(session, model)
 }

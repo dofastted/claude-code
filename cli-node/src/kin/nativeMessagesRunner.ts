@@ -27,7 +27,7 @@ import { WRAP_OFFICIAL_CLI_VERSION } from './cliVersion.js'
 import { kernelEnv } from './kernelEnv.js'
 import { validClassifierContext, type ClassifierRequestContext } from './classifierRequest.js'
 import { withOutboundHeaders } from './outboundHeaders.js'
-import { startVmTelemetry, captureVmJob, recordVmJob, type VmJobTelemetryScope } from './vmTelemetry.js'
+import { startVmTelemetry, captureVmJob, sendSlotStart, type VmJobTelemetryScope } from './vmTelemetry.js'
 
 type Phase = 'idle' | 'running' | 'cancelling'
 
@@ -182,8 +182,8 @@ function startJob(
   }
 
   const telemetryScope = captureVmJob()
+  sendSlotStart(sessionIdFromRequest(request) || jobId, String(request.model || hostOptions.userSpecifiedModel || ''))
   const abort = new AbortController()
-  slot.phase = 'running'
   slot.jobId = jobId
   slot.abort = abort
   slot.task = withOutboundHeaders(
@@ -318,7 +318,6 @@ async function runJob(
     const failure = classifyKinJobError(error, { sawEvent, message, sdkKind })
     failure.retry_after ??= rateLimitHeaders['retry-after']
     failure.request_id ??= rateLimitHeaders['request-id']
-    recordVmJob(telemetryScope, false, sessionId || jobId, model, failure.code)
     await writeStdout({
       type: 'job_error',
       job_id: jobId,
@@ -416,7 +415,6 @@ async function runJob(
   if (abort.signal.aborted) return
 
   await emitRateLimitHeaders()
-  recordVmJob(telemetryScope, true, sessionId || jobId, model)
   await writeStdout({
     type: 'job_done',
     job_id: jobId,
