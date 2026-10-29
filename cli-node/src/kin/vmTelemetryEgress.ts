@@ -56,6 +56,11 @@ export class VmTelemetryEgress {
 
   constructor(context: VmTelemetryContext) {
     this.filename = join(context.home, 'telemetry', 'egress.json')
+    this.load(context)
+  }
+
+  /** A control-plane publication can replace a failed stub without restarting the sender. */
+  private load(context: VmTelemetryContext) {
     const parsed = snapshotSchema.safeParse(readTelemetryJson(this.filename))
     if (
       parsed.success &&
@@ -63,9 +68,11 @@ export class VmTelemetryEgress {
       parsed.data.binding === context.binding &&
       isIP(parsed.data.ip) &&
       validZone(parsed.data.timezone) &&
-      parsed.data.epoch === telemetryHash([parsed.data.binding, parsed.data.ip])
+      parsed.data.epoch === telemetryHash([parsed.data.binding, parsed.data.ip]) &&
+      !parsed.data.error
     ) {
       this.current = parsed.data
+      this.initial = false
     }
   }
 
@@ -85,16 +92,18 @@ export class VmTelemetryEgress {
   }
 
   async ensure(context: VmTelemetryContext, signal: AbortSignal): Promise<EgressSnapshot> {
-    const route = this.transport(context)
+    if (!this.current || this.current.error || this.current.binding !== context.binding) this.load(context)
     if (
-      !this.initial &&
       this.current &&
       this.current.binding === context.binding &&
       !this.current.error &&
       Date.now() >= this.current.checked_at &&
       Date.now() - this.current.checked_at < 600_000
-    )
+    ) {
+      this.initial = false
       return this.current
+    }
+    const route = this.transport(context)
     try {
       const payload = await requestTelemetryJson(context.geoEndpoint, route, { signal, maxBytes: 32768 })
       const parsed = geoSchema.safeParse(payload)
