@@ -511,9 +511,7 @@ export class VmTelemetryOwner {
     else if (!this.busy)
       this.state.state = !this.context.validCredentials
         ? 'waiting_credentials'
-        : !this.egress.snapshot ||
-            this.egress.snapshot.binding !== this.binding ||
-            Date.now() - this.egress.snapshot.checked_at >= 600_000
+        : !this.egress.snapshot || this.egress.snapshot.binding !== this.binding || this.egress.snapshot.error
           ? 'waiting_egress'
           : this.state.last_error
             ? 'error'
