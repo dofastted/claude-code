@@ -66,13 +66,12 @@ export class VmTelemetryEgress {
   }
 
   transport(context: VmTelemetryContext): TelemetryRoute {
-    if (!context.bindingValid || !context.binding || context.proxyUrl === null)
-      throw new Error('telemetry_proxy_unavailable')
+    if (!context.bindingValid || !context.binding) throw new Error('telemetry_proxy_unavailable')
     if (this.binding === context.binding && this.route) return this.route
     this.close()
     this.binding = context.binding
     this.initial = true
-    this.route = createTelemetryRoute(context.proxyUrl)
+    this.route = createTelemetryRoute()
     return this.route
   }
 

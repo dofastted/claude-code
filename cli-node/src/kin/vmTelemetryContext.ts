@@ -136,16 +136,9 @@ export function readVmTelemetryContext(): VmTelemetryContext {
   const projection = kernel.telemetry
   const interval = projection?.upload_interval_seconds ?? 600
   const intervalValid = Number.isInteger(interval) && interval >= 60 && interval <= 86400 && interval % 60 === 0
-  const bindingValid = Boolean(
-    projection &&
-      (projection.proxy_url !== '' ||
-        (projection.proxy_required === false &&
-          projection.proxy_id &&
-          /^px-local(?:$|[-:])/.test(projection.proxy_id))),
-  )
-  const binding = bindingValid
-    ? telemetryHash([projection!.proxy_id, projection!.proxy_url, projection!.proxy_required])
-    : null
+  const bindingValid = Boolean(projection?.proxy_id)
+  // The guest never dials a proxy. Binding identifies the exit the outer forwarder already applies.
+  const binding = bindingValid ? telemetryHash([projection!.proxy_id, '', false]) : null
   const endpoint =
     kernel.test_endpoints === true && projection?.event_logging_url
       ? projection.event_logging_url
@@ -204,7 +197,7 @@ export function readVmTelemetryContext(): VmTelemetryContext {
     binding,
     version: telemetryHash([binding, endpoint, geoEndpoint]),
     bindingValid,
-    proxyUrl: bindingValid ? projection!.proxy_url : null,
+    proxyUrl: null,
     proxyId: bindingValid ? projection!.proxy_id : null,
     endpoint,
     geoEndpoint,
