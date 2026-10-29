@@ -85,12 +85,21 @@ export function parseStdinLine(line: string): StdinFrame | null {
 }
 
 let writeChain: Promise<void> = Promise.resolve()
+let queuedBytes = 0
+const STDOUT_QUEUE_BYTES = 2 * 1024 * 1024
 
 export function writeStdout(frame: StdoutFrame): Promise<void> {
   const line = JSON.stringify(frame) + '\n'
+  if (queuedBytes + line.length > STDOUT_QUEUE_BYTES) {
+    return Promise.reject(new Error('stdout_backpressure'))
+  }
+  queuedBytes += line.length
+  const release = () => {
+    queuedBytes = Math.max(0, queuedBytes - line.length)
+  }
   const next = writeChain.then(
-    () => writeLine(line),
-    () => writeLine(line),
+    () => writeLine(line).finally(release),
+    () => writeLine(line).finally(release),
   )
   writeChain = next.then(
     () => undefined,

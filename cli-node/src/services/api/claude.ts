@@ -105,7 +105,7 @@ import {
 import { resolveAppliedEffort } from '../../utils/effort.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { errorMessage } from '../../utils/errors.js'
-import { computeFingerprintFromMessages } from '../../utils/fingerprint.js'
+import { computeFingerprintFromMessages, computeFingerprintFromWireMessages } from '../../utils/fingerprint.js'
 import { captureAPIRequest, logError } from '../../utils/log.js'
 import {
   createAssistantAPIErrorMessage,
@@ -1450,31 +1450,18 @@ async function* queryModel(
   })
 
   queryCheckpoint('query_message_normalization_start')
-  let messagesForAPI = normalizeMessagesForAPI(messages, filteredTools)
+  // Native hops already carry the caller transcript on wireMessages. The
+  // engine copy is not what gets sent, so don't walk it four more times.
+  const kinWire = Array.isArray(options.wireMessages)
+  let messagesForAPI = kinWire ? [] : normalizeMessagesForAPI(messages, filteredTools)
   queryCheckpoint('query_message_normalization_end')
 
-  // Model-specific post-processing: strip tool-search-specific fields if the
-  // selected model doesn't support tool search.
-  //
-  // Why is this needed in addition to normalizeMessagesForAPI?
-  // - normalizeMessagesForAPI uses isToolSearchEnabledNoModelCheck() because it's
-  //   called from ~20 places (analytics, feedback, sharing, etc.), many of which
-  //   don't have model context. Adding model to its signature would be a large refactor.
-  // - This post-processing uses the model-aware isToolSearchEnabled() check
-  // - This handles mid-conversation model switching (e.g., Sonnet → Haiku) where
-  //   stale tool-search fields from the previous model would cause 400 errors
-  //
-  // Note: For assistant messages, normalizeMessagesForAPI already normalized the
-  // tool inputs, so stripCallerFieldFromAssistantMessage only needs to remove the
-  // 'caller' field (not re-normalize inputs).
-  if (!useToolSearch) {
+  if (!kinWire && !useToolSearch) {
     messagesForAPI = messagesForAPI.map((msg) => {
       switch (msg.type) {
         case 'user':
-          // Strip tool_reference blocks from tool_result content
           return stripToolReferenceBlocksFromUserMessage(msg)
         case 'assistant':
-          // Strip 'caller' field from tool_use blocks
           return stripCallerFieldFromAssistantMessage(msg)
         default:
           return msg
@@ -1482,37 +1469,25 @@ async function* queryModel(
     })
   }
 
-  // Repair tool_use/tool_result pairing mismatches that can occur when resuming
-  // remote/teleport sessions. Inserts synthetic error tool_results for orphaned
-  // tool_uses and strips orphaned tool_results referencing non-existent tool_uses.
-  messagesForAPI = ensureToolResultPairing(messagesForAPI)
-
-  // Strip advisor blocks — the API rejects them without the beta header.
-  if (!betas.includes(ADVISOR_BETA_HEADER)) {
-    messagesForAPI = stripAdvisorBlocks(messagesForAPI)
+  if (!kinWire) {
+    messagesForAPI = ensureToolResultPairing(messagesForAPI)
+    if (!betas.includes(ADVISOR_BETA_HEADER)) {
+      messagesForAPI = stripAdvisorBlocks(messagesForAPI)
+    }
+    messagesForAPI = stripExcessMediaItems(messagesForAPI, API_MAX_MEDIA_PER_REQUEST)
   }
 
-  // Strip excess media items before making the API call.
-  // The API rejects requests with >100 media items but returns a confusing error.
-  // Rather than erroring (which is hard to recover from in Cowork/CCD), we
-  // silently drop the oldest media items to stay within the limit.
-  messagesForAPI = stripExcessMediaItems(
-    messagesForAPI,
-    API_MAX_MEDIA_PER_REQUEST,
-  )
-
-  // Instrumentation: Track message count after normalization
   logEvent('tengu_api_after_normalize', {
-    postNormalizedMessageCount: messagesForAPI.length,
+    postNormalizedMessageCount: kinWire ? options.wireMessages.length : messagesForAPI.length,
   })
 
-  // Compute fingerprint from first user message for attribution.
-  // Must run BEFORE injecting synthetic messages (e.g. deferred tool names)
-  // so the fingerprint reflects the actual user input.
-  const fingerprint = computeFingerprintFromMessages(messagesForAPI)
+  const fingerprint = kinWire
+    ? computeFingerprintFromWireMessages(options.wireMessages)
+    : computeFingerprintFromMessages(messagesForAPI)
   const gates = attributionGates(isClaudeAISubscriber())
   const promptId = randomUUID()
-  const billingIndexes = billingIndexesFromMessages(messagesForAPI) || {}
+  const billingIndexes =
+    billingIndexesFromMessages(kinWire ? options.wireMessages : messagesForAPI) || {}
 
   // When the delta attachment is enabled, deferred tools are announced
   // via persisted deferred_tools_delta attachments instead of this

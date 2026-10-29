@@ -11,7 +11,6 @@ import type {
   BetaToolChoiceTool,
   BetaToolUnion,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
-import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/index.mjs'
 import { queryKinMessagesWithStreaming } from '../services/api/claude.js'
 import {
   runWithJobSession,
@@ -20,8 +19,6 @@ import {
   runWithJobAutoCompactWindow,
 } from '../bootstrap/jobSession.js'
 import { asSessionId } from '../types/ids.js'
-import type { Message } from '../types/message.js'
-import { createAssistantMessage, createUserMessage } from '../utils/messages.js'
 import { isStaleConnectionError, isStaleConnectionHay } from './staleConnection.js'
 import { CAPABILITIES, PROTOCOL_VERSION, parseStdinLine, slotId, writeStdout } from './stdioProtocol.js'
 import { classifyKinJobError } from './jobError.js'
@@ -291,7 +288,7 @@ async function runJob(
   delete request.auto_compact_window
   const model =
     typeof request.model === 'string' && request.model ? request.model : hostOptions.userSpecifiedModel || ''
-  const messages = messagesFromRequest(request)
+  const messages: [] = []
   const system = systemFromRequest(request)
   const toolSchemas = Array.isArray(request.tools) ? (request.tools as BetaToolUnion[]) : []
   const toolChoice = request.tool_choice as BetaToolChoiceTool | BetaToolChoiceAuto | undefined
@@ -465,25 +462,7 @@ function systemFromRequest(request: Record<string, unknown>): string[] {
   })
 }
 
-function messagesFromRequest(request: Record<string, unknown>): Message[] {
-  const messages = Array.isArray(request.messages) ? request.messages : []
-  return messages.map(toEngineMessage).filter((m): m is Message => m !== null)
-}
 
-function toEngineMessage(raw: unknown): Message | null {
-  if (!raw || typeof raw !== 'object') return null
-  const msg = raw as { role?: string; content?: unknown }
-  const content = msg.content
-  const asContent: string | ContentBlockParam[] =
-    typeof content === 'string' || Array.isArray(content) ? (content as string | ContentBlockParam[]) : ''
-  if (msg.role === 'assistant') {
-    return createAssistantMessage({ content: asContent as never })
-  }
-  if (msg.role === 'user' || msg.role === 'tool') {
-    return createUserMessage({ content: asContent })
-  }
-  return null
-}
 
 export function pickRateLimitHeaders(headers?: Headers | Record<string, string> | null): Record<string, string> {
   const out: Record<string, string> = {}
