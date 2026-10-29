@@ -285,7 +285,7 @@ struct Probe {
 }
 
 const JOB_SINK_ITEMS: usize = 256;
-const JOB_SINK_BYTES: usize = 2 * 1024 * 1024;
+const JOB_SINK_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, serde::Serialize)]
 struct NativeHostInfo {

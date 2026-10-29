@@ -114,7 +114,7 @@ impl WorkerConfig {
             self.max_response_bytes = 64 << 20;
         }
         if self.max_event_bytes <= 0 {
-            self.max_event_bytes = 32 << 20;
+            self.max_event_bytes = 64 << 20;
         }
         if self.delivery_mode.is_empty() {
             self.delivery_mode = "realtime".to_string();
@@ -328,7 +328,7 @@ mod tests {
         assert_eq!(config.idle_timeout_seconds, 180);
         assert_eq!(config.max_request_bytes, 32 << 20);
         assert_eq!(config.max_response_bytes, 64 << 20);
-        assert_eq!(config.max_event_bytes, 32 << 20);
+        assert_eq!(config.max_event_bytes, 64 << 20);
         assert_eq!(config.delivery_mode, "realtime");
         assert_eq!(config.runtime_kind, "docker");
         assert_eq!(config.default_cache_ttl, "1h");
