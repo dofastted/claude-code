@@ -16,6 +16,8 @@ struct StickyPin {
 pub struct SlotScheduler {
     ready: VecDeque<String>,
     sticky: HashMap<String, StickyPin>,
+    /// Newest two sessions on each slot. `last_used` only moves forward.
+    slot_recent: HashMap<String, Vec<(String, Instant)>>,
     sticky_ttl: Duration,
 }
 
@@ -28,6 +30,7 @@ impl SlotScheduler {
         Self {
             ready: VecDeque::new(),
             sticky: HashMap::new(),
+            slot_recent: HashMap::new(),
             sticky_ttl,
         }
     }
@@ -54,36 +57,73 @@ impl SlotScheduler {
             .is_some_and(|pin| pin.slot_id == slot_id)
         {
             self.sticky.remove(&key);
+            self.drop_owner(slot_id, &key);
         }
     }
     pub fn bind_sticky(&mut self, session_key: String, slot_id: String) {
+        let at = Instant::now();
+        self.note_use(&slot_id, &session_key, at);
         self.sticky.insert(
             session_key,
             StickyPin {
                 slot_id,
-                last_used: Instant::now(),
+                last_used: at,
             },
         );
     }
 
-    fn prune_expired(&mut self) {
-        let ttl = self.sticky_ttl;
-        self.sticky.retain(|_, pin| pin.last_used.elapsed() < ttl);
+    fn note_use(&mut self, slot_id: &str, key: &str, at: Instant) {
+        let top = self.slot_recent.entry(slot_id.to_string()).or_default();
+        if let Some(found) = top.iter_mut().find(|(owner, _)| owner == key) {
+            found.1 = at;
+        } else {
+            top.push((key.to_string(), at));
+        }
+        top.sort_by(|left, right| right.1.cmp(&left.1));
+        top.truncate(2);
     }
 
-    /// Most recent use of each pinned slot by any live session other than `key`.
-    fn owner_last_used(&self, key: &str) -> HashMap<&str, Instant> {
-        let mut owners: HashMap<&str, Instant> = HashMap::new();
-        for (session, pin) in &self.sticky {
-            if session == key {
-                continue;
-            }
-            let entry = owners.entry(pin.slot_id.as_str()).or_insert(pin.last_used);
-            if pin.last_used > *entry {
-                *entry = pin.last_used;
-            }
+    fn drop_owner(&mut self, slot_id: &str, key: &str) {
+        let Some(top) = self.slot_recent.get(slot_id) else {
+            return;
+        };
+        if !top.iter().any(|(owner, _)| owner == key) {
+            return;
         }
-        owners
+        let mut rows: Vec<(String, Instant)> = self
+            .sticky
+            .iter()
+            .filter(|(_, pin)| pin.slot_id == slot_id)
+            .map(|(owner, pin)| (owner.clone(), pin.last_used))
+            .collect();
+        rows.sort_by(|left, right| right.1.cmp(&left.1));
+        rows.truncate(2);
+        self.slot_recent.insert(slot_id.to_string(), rows);
+    }
+
+    fn prune_expired(&mut self) {
+        let ttl = self.sticky_ttl;
+        let expired: Vec<(String, String)> = self
+            .sticky
+            .iter()
+            .filter(|(_, pin)| pin.last_used.elapsed() >= ttl)
+            .map(|(key, pin)| (key.clone(), pin.slot_id.clone()))
+            .collect();
+        for (key, _) in &expired {
+            self.sticky.remove(key);
+        }
+        for (key, slot_id) in expired {
+            self.drop_owner(&slot_id, &key);
+        }
+    }
+
+    fn other_used(&self, slot_id: &str, key: &str) -> Option<Instant> {
+        self.slot_recent.get(slot_id).and_then(|top| {
+            top.iter()
+                .filter(|(owner, _)| owner != key)
+                .map(|(_, at)| *at)
+                .max()
+        })
     }
 
     pub fn pick(
@@ -94,9 +134,12 @@ impl SlotScheduler {
     ) -> Result<String, KernelError> {
         self.prune_expired();
         let key = format!("{tenant_id}\u{1f}{session_id}");
-        if let Some(pin) = self.sticky.get_mut(&key) {
+        let touched = self.sticky.get_mut(&key).map(|pin| {
             pin.last_used = Instant::now();
-            let id = pin.slot_id.clone();
+            (pin.slot_id.clone(), pin.last_used)
+        });
+        if let Some((id, at)) = touched {
+            self.note_use(&id, &key, at);
             if let Some(slot) = slots.iter().find(|slot| slot.id == id)
                 && slot.phase == SlotPhase::ReadyBlocked
                 && slot.tenant_id.as_deref().unwrap_or(tenant_id) == tenant_id
@@ -109,7 +152,11 @@ impl SlotScheduler {
 
         // Free slot choice: never-pinned first, then the least recently used
         // pinned slot. Taking another session's slot is the last resort.
-        let owners = self.owner_last_used(&key);
+        let owners: HashMap<String, Instant> = self
+            .ready
+            .iter()
+            .filter_map(|id| self.other_used(id, &key).map(|at| (id.clone(), at)))
+            .collect();
         let chosen = self
             .ready
             .iter()
@@ -122,7 +169,7 @@ impl SlotScheduler {
                 })
             })
             // None (never pinned) sorts before any Some(last_used).
-            .min_by_key(|(order, id)| (owners.get(id.as_str()).copied(), *order))
+            .min_by_key(|(order, id)| (owners.get(*id).copied(), *order))
             .map(|(_, id)| id.clone());
         let Some(id) = chosen else {
             return Err(KernelError::NoCapacity);

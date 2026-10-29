@@ -100,6 +100,10 @@ pub enum KernelError {
     NoCapacity,
     #[error("runtime overloaded")]
     Overloaded { retry_after: Option<String> },
+    /// The hop cannot fit in this cgroup even when the cli-node is idle.
+    /// 413 + `invalid_request`, not retryable. Distinct from a temporary watermark.
+    #[error("request exceeds slot memory")]
+    BodyDoesNotFit,
     #[error("{0}")]
     ContinuationMismatch(String),
     #[error("the bound runtime is no longer available")]
@@ -136,6 +140,7 @@ impl IntoResponse for KernelError {
             }
             Self::NoCapacity => (StatusCode::SERVICE_UNAVAILABLE, "no_capacity", true),
             Self::Overloaded { .. } => (StatusCode::SERVICE_UNAVAILABLE, "overloaded", true),
+            Self::BodyDoesNotFit => (StatusCode::PAYLOAD_TOO_LARGE, "invalid_request", false),
             Self::ContinuationMismatch(_) => (StatusCode::CONFLICT, "continuation_mismatch", false),
             Self::ContinuationLost => (StatusCode::CONFLICT, "continuation_lost", false),
             Self::Provider(_) => (StatusCode::BAD_GATEWAY, "provider_error", true),
