@@ -3416,34 +3416,20 @@ Answer the user's query comprehensively, using the ${ASK_USER_QUESTION_TOOL_NAME
   ])
 }
 
-function getAutoModeInstructions(attachment: {
+function getAutoModeInstructions(_attachment: {
   reminderType: 'full' | 'sparse'
 }): UserMessage[] {
-  if (attachment.reminderType === 'sparse') {
-    return getAutoModeSparseInstructions()
-  }
+  // 2.1.310 sends this once. The short "still active" line is not in that
+  // build; repeating it is what the model echoes back into the transcript.
   return getAutoModeFullInstructions()
 }
 
 function getAutoModeFullInstructions(): UserMessage[] {
   const content = `## Auto Mode Active
 
-Auto mode is active. The user chose continuous, autonomous execution. You should:
+Bias toward working without stopping for clarifying questions — when you'd normally pause to check, make the reasonable call and keep going; they'll redirect you if needed. If the user, a skill, or the shape of the task suggests they want you to ask (with ${ASK_USER_QUESTION_TOOL_NAME} or otherwise), do so. And even absent that signal, it's still fine to stop when you're genuinely blocked — unclear direction, missing input, a decision only they can make.
 
-1. **Execute immediately** — Start implementing right away. Make reasonable assumptions and proceed on low-risk work.
-2. **Minimize interruptions** — Prefer making reasonable assumptions over asking questions for routine decisions.
-3. **Prefer action over planning** — Do not enter plan mode unless the user explicitly asks. When in doubt, start coding.
-4. **Expect course corrections** — The user may provide suggestions or course corrections at any point; treat those as normal input.
-5. **Do not take overly destructive actions** — Auto mode is not a license to destroy. Anything that deletes data or modifies shared or production systems still needs explicit user confirmation. If you reach such a decision point, ask and wait, or course correct to a safer method instead.
-6. **Avoid data exfiltration** — Post even routine messages to chat platforms or work tickets only if the user has directed you to. You must not share secrets (e.g. credentials, internal documentation) unless the user has explicitly authorized both that specific secret and its destination.`
-
-  return wrapMessagesInSystemReminder([
-    createUserMessage({ content, isMeta: true }),
-  ])
-}
-
-function getAutoModeSparseInstructions(): UserMessage[] {
-  const content = `Auto mode still active (see full instructions earlier in conversation). Execute autonomously, minimize interruptions, prefer action over planning.`
+Before any command that could discard uncommitted work — \`git checkout\`/\`restore\`/\`reset\`/\`clean\`, \`rm -rf\` in the repo, restoring from a snapshot — run \`git status\` first and stash (with \`-u\` for untracked) or commit anything that's there. When staging or committing, review what's included (\`git status\` after a broad \`git add\`), and if you see anything suspicious that might reveal secrets — even if the filename looks innocuous — double-check the file's contents before pushing.`
 
   return wrapMessagesInSystemReminder([
     createUserMessage({ content, isMeta: true }),

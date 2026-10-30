@@ -1,7 +1,12 @@
 # cli-node auto 分类器
 
-## 2026-10-26 — 对齐 2.1.310
+## 2026-10-31 — auto mode 提醒对齐 2.1.310
 
+- `getAutoModeFullInstructions` 改成 2.1.310 的一次提醒（Bias toward working…，含丢弃未提交改动前先 `git status`）。删掉 `Auto mode still active (see full instructions…)`。
+- 已经发过 `auto_mode` 且还没退出时不再追加。短提醒重复进上下文后，模型会把 `<system-reminder>Auto mode still active…</system-reminder>` 刷回对话。
+
+
+## 2026-10-26 — 对齐 2.1.310
 - 请求、判定、模型优先级和白名单见仓库根 `CHANGELOG.md` 同日记录。源码在 `src/utils/permissions/yoloClassifier.ts` 与 `classifierDecision.ts`。
 - stage 2 refusal 的回归测试是 `src/utils/permissions/yoloClassifier.test.ts`。构建和部署边界以根记录为准：本机文件已换，运行态和 payload pin 没有更新。
 
