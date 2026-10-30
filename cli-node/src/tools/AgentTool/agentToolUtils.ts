@@ -421,6 +421,7 @@ export async function classifyHandoffIfNeeded({
       tools,
       toolPermissionContext as ToolPermissionContext,
       abortSignal,
+      { severitySite: 'handoff' },
     )
 
     const handoffDecision = classifierResult.unavailable

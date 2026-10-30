@@ -13,6 +13,7 @@ import {
 import { getClaudeCodeUserAgent } from './userAgent.js'
 import { getWorkload } from './workloadContext.js'
 import { officialCliVersion } from '../kin/cliVersion.js'
+import { readPanelCcEntrypoint } from '../kin/cacheTtl.js'
 
 // WARNING: We rely on `claude-cli` in the user agent for log filtering.
 // Please do NOT change this without making sure that logging also gets updated!
@@ -32,7 +33,7 @@ export function getUserAgent(): string {
   // so the read picks up the same setWorkload() value as getAttributionHeader.
   const workload = getWorkload()
   const workloadSuffix = workload ? `, workload/${workload}` : ''
-  const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT || 'cli'
+  const entrypoint = readPanelCcEntrypoint()
   return `claude-cli/${officialCliVersion()} (external, ${entrypoint}${agentSdkVersion}${clientApp}${workloadSuffix})`
 }
 

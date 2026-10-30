@@ -77,26 +77,27 @@ function withCchPlaceholder(header: string): string {
 }
 
 /**
- * A panel-assembled official system is already billing, identity, reporting,
- * static, dynamic. Joining those into one leftover makes `mpo` unable to
- * split them. Keep the array. A single caller leftover still gets the layout
- * prefix and the slot environment.
+ * A panel-assembled official system is already billing, identity, harness,
+ * boundary, guidance. Keep that array. The 2.1.296 reporting shape is the
+ * same contract with its static block in the third slot.
  */
 export function preserveOfficialSystem(systemPrompt: readonly string[]): string[] | null {
-  const blocks = systemPrompt
-    .filter((block) => (block || '').trim())
-    .filter((block) => block !== SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
+  const raw = systemPrompt.filter((block) => (block || '').trim())
+  const boundaryAt = raw.indexOf(SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
+  const blocks = raw.filter((block) => block !== SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
   if (blocks.length < 4) return null
-  const [billing, identity, reporting] = blocks
+  const [billing, identity, third] = blocks
   if (!billing.trim().startsWith('x-anthropic-billing-header')) return null
   if (!OFFICIAL_IDENTITIES[identity.trim()]) return null
-  if (reporting !== SYSTEM_PROMPT_REPORTING_OUTCOMES) return null
-  // Panel rendering strips the marker so HTTP never sends the literal. Put it
-  // back between the static block and the first dynamic block.
+  const officialThird =
+    third === SYSTEM_PROMPT_REPORTING_OUTCOMES ||
+    third.includes('You are an agent working with the user toward their goals')
+  if (!officialThird) return null
   const normalized = blocks.map((block) =>
     block.trim().startsWith('x-anthropic-billing-header') ? withCchPlaceholder(block) : block,
   )
-  return [...normalized.slice(0, 4), SYSTEM_PROMPT_DYNAMIC_BOUNDARY, ...normalized.slice(4)]
+  const splitAt = boundaryAt > 0 ? Math.min(boundaryAt, normalized.length) : 4
+  return [...normalized.slice(0, splitAt), SYSTEM_PROMPT_DYNAMIC_BOUNDARY, ...normalized.slice(splitAt)]
 }
 
 export function layoutSystemBlocks(opts: { attribution: string; leftover?: string }): string[] {

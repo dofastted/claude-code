@@ -2,10 +2,11 @@
 
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import { logForDebugging } from '../utils/debug.js'
-import { isEnvDefinedFalsy } from '../utils/envUtils.js'
-import { getAPIProvider } from '../utils/model/providers.js'
+import { isEnvDefinedFalsy, isEnvTruthy } from '../utils/envUtils.js'
+import { getAPIProvider, isFirstPartyAnthropicBaseUrl } from '../utils/model/providers.js'
 import { getWorkload } from '../utils/workloadContext.js'
 import { officialCliVersion } from '../kin/cliVersion.js'
+import { readPanelCcEntrypoint } from '../kin/cacheTtl.js'
 export const CC_VERSION = '2.1.296'
 
 const DEFAULT_PREFIX = `You are Claude Code, Anthropic's official CLI for Claude.`
@@ -44,18 +45,37 @@ export function getCLISyspromptPrefix(options?: {
  * Check if attribution header is enabled.
  * Enabled by default, can be disabled via env var or GrowthBook killswitch.
  */
-function isAttributionHeaderEnabled(): boolean {
-  if (isEnvDefinedFalsy(process.env.CLAUDE_CODE_ATTRIBUTION_HEADER)) {
+function isAttributionHeaderEnabled(ignoreEnvOptOut = false): boolean {
+  if (!ignoreEnvOptOut && isEnvDefinedFalsy(process.env.CLAUDE_CODE_ATTRIBUTION_HEADER)) {
     return false
   }
   return getFeatureValue_CACHED_MAY_BE_STALE('tengu_attribution_header', true)
 }
 
 /**
- * 2.1.296 billing block. cch=00000 is overwritten in fetch() by utils/cch.ts
- * because this tree has no Bun native attestation. The hash formula is unchanged.
- * Billing fields are independent of subscription status; only CCH is configurable.
+ * 2.1.303 billing line (`GPo`). `cch=00000` is the placeholder the native
+ * scanner overwrites. Empty fragments are omitted. Order is fixed.
  */
+const PROJECT_ID =
+  /^claude_proj_(?:staging_|local_)?01[1-9A-HJ-NP-Za-km-z]{22}$/
+const PROJECT_SOURCES: Record<string, true> = {
+  harness: true,
+  user: true,
+  project: true,
+  local: true,
+  flag: true,
+  managed: true,
+  admin_default: true,
+}
+const SELF_HOSTED_HOST_SUFFIXES = [
+  '.localhost',
+  '.local',
+  '.internal',
+  '.lan',
+  '.home',
+  '.localdomain',
+]
+
 export type AttributionOptions = {
   isSubagent?: boolean
   prevReqId?: string
@@ -63,18 +83,56 @@ export type AttributionOptions = {
   turnOrigin?: string
   promptIndex?: number
   turnIndex?: number
+  includeCch?: boolean
+  includeSubscriberFields?: boolean
+  /** `1` when the gateway credential is verified, otherwise `env`. */
+  gateway?: '1' | 'env'
+  gatewayUrl?: string
+  /** `vouched` drops cc_gateway. */
+  hostVerdict?: string
+  projectId?: string
+  projectSource?: string
+  /** Auto mode ignores the env opt-out. Org killswitch still applies. */
+  ignoreEnvOptOut?: boolean
 }
+
+function billingProvider(): 'gateway' | 'firstParty' | 'bedrock' | 'vertex' | 'foundry' {
+  if (
+    process.env.CLAUDE_CODE_USE_GATEWAY === '1' ||
+    isEnvTruthy(process.env.CLAUDE_CODE_USE_GATEWAY)
+  ) {
+    return 'gateway'
+  }
+  return getAPIProvider()
+}
+
+/** xi(): declared official host, or no ANTHROPIC_BASE_URL. */
+function officialClientUrl(): boolean {
+  return !process.env.ANTHROPIC_BASE_URL || isFirstPartyAnthropicBaseUrl()
+}
+
+function firstPartyBillingGate(): boolean {
+  return billingProvider() === 'firstParty' && officialClientUrl()
+}
+
 export function attributionGates(isSubscriber: boolean): {
   includeCch: boolean
   includeSubscriberFields: boolean
 } {
-  const provider = getAPIProvider()
-  const firstPartySub = provider === 'firstParty' && isSubscriber
+  const provider = billingProvider()
   return {
-    // Billing always carries the placeholder; the panel controls sealing.
-    includeCch: true,
-    includeSubscriberFields: firstPartySub,
+    includeCch:
+      (provider === 'firstParty' && officialClientUrl()) || provider === 'vertex',
+    includeSubscriberFields: provider === 'firstParty' && (isSubscriber || officialClientUrl()),
   }
+}
+
+function selfHostedHost(host: string): boolean {
+  const name = host.toLowerCase()
+  if (name === 'localhost' || name.endsWith('.localhost')) return true
+  return SELF_HOSTED_HOST_SUFFIXES.some(
+    (suffix) => name.endsWith(suffix) && name !== suffix.slice(1),
+  )
 }
 
 
@@ -147,31 +205,63 @@ export function billingIndexesFromMessages(messages: unknown): {
 }
 
 export function getAttributionHeader(fingerprint: string, opts: AttributionOptions = {}): string {
-  if (!isAttributionHeaderEnabled()) {
+  if (!isAttributionHeaderEnabled(opts.ignoreEnvOptOut === true)) {
     return ''
   }
 
   const version = `${officialCliVersion()}.${fingerprint}`
-  const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT ?? 'unknown'
-  const cch = ' cch=00000;'
+  const entrypoint = readPanelCcEntrypoint()
+  const cch = opts.includeCch === false ? '' : ' cch=00000;'
   const workload = getWorkload()
   const workloadPair = workload ? ` cc_workload=${workload};` : ''
+  const subscriber = opts.includeSubscriberFields === true && firstPartyBillingGate()
   const sub = opts.isSubagent ? ' cc_is_subagent=true;' : ''
   const prev =
-    opts.prevReqId && /^req_[A-Za-z0-9_-]{1,36}$/.test(opts.prevReqId) ? ` cc_prev_req=${opts.prevReqId};` : ''
+    subscriber && opts.prevReqId && /^req_[A-Za-z0-9_-]{1,36}$/.test(opts.prevReqId)
+      ? ` cc_prev_req=${opts.prevReqId};`
+      : ''
   const prompt =
-    opts.promptId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(opts.promptId)
+    subscriber &&
+    opts.promptId &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(opts.promptId)
       ? ` cc_prompt_id=${opts.promptId};`
       : ''
   const origin =
-    opts.turnOrigin && /^[a-z][a-z_]{0,31}$/.test(opts.turnOrigin) ? ` cc_turn_origin=${opts.turnOrigin};` : ''
+    subscriber && opts.turnOrigin && /^[a-z][a-z_]{0,31}$/.test(opts.turnOrigin)
+      ? ` cc_turn_origin=${opts.turnOrigin};`
+      : ''
   const promptIndex = boundedBillingIndex(opts.promptIndex, 0)
   const turnIndex = boundedBillingIndex(opts.turnIndex, 1)
   const indexes =
-    promptIndex !== undefined && turnIndex !== undefined
+    subscriber && promptIndex !== undefined && turnIndex !== undefined
       ? ` cc_prompt_index=${promptIndex}; cc_turn_index=${turnIndex};`
       : ''
-  const header = `x-anthropic-billing-header: cc_version=${version}; cc_entrypoint=${entrypoint};${cch}${workloadPair}${sub}${prev}${prompt}${origin}${indexes}`
+  let gateway = ''
+  if (opts.gateway === '1' || opts.gateway === 'env') {
+    let excluded = opts.hostVerdict?.includes('vouched') === true
+    if (!excluded && opts.gatewayUrl) {
+      try {
+        const host = new URL(opts.gatewayUrl).host
+        excluded = !host || selfHostedHost(host)
+      } catch {
+        excluded = true
+      }
+    }
+    if (!excluded) gateway = ` cc_gateway=${opts.gateway};`
+  }
+  let project = ''
+  if (
+    !process.env.ANTHROPIC_UNIX_SOCKET &&
+    !isEnvTruthy(process.env.CLAUDE_CODE_REMOTE) &&
+    firstPartyBillingGate() &&
+    opts.projectId &&
+    PROJECT_ID.test(opts.projectId) &&
+    opts.projectSource &&
+    Object.hasOwn(PROJECT_SOURCES, opts.projectSource)
+  ) {
+    project = ` cc_project=${opts.projectId}; cc_project_src=${opts.projectSource};`
+  }
+  const header = `x-anthropic-billing-header: cc_version=${version}; cc_entrypoint=${entrypoint};${cch}${workloadPair}${sub}${prev}${prompt}${origin}${indexes}${gateway}${project}`
 
   logForDebugging(`attribution header ${header}`)
   return header

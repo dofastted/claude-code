@@ -220,6 +220,8 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   name = name.toLowerCase()
   // Special cases for Claude 4+ models to differentiate versions.
   // Order matters: more specific versions first (5-5 before 5, 4-6 before 4).
+  if (name.includes('claude-fable-5-1')) return 'claude-fable-5-1'
+  if (name.includes('claude-fable-5')) return 'claude-fable-5'
   if (name.includes('claude-opus-5-5')) {
     return 'claude-opus-5-5'
   }
@@ -613,14 +615,22 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   const has1m = modelId.toLowerCase().includes('[1m]')
   const canonical = getCanonicalName(modelId)
 
+  if (canonical.includes('claude-fable-5-1')) return 'Fable 5.1'
+  if (canonical.includes('claude-fable-5')) return 'Fable 5'
   if (canonical.includes('claude-opus-5-5')) {
-    return has1m ? 'Opus 5.5 (with 1M context)' : 'Opus 5.5'
+    return has1m ? 'Opus 5.5 (1M context)' : 'Opus 5.5'
   }
   if (canonical.includes('claude-opus-5')) {
-    return has1m ? 'Opus 5 (with 1M context)' : 'Opus 5'
+    return has1m ? 'Opus 5 (1M context)' : 'Opus 5'
+  }
+  if (canonical.includes('claude-opus-4-8')) {
+    return has1m ? 'Opus 4.8 (1M context)' : 'Opus 4.8'
+  }
+  if (canonical.includes('claude-opus-4-7')) {
+    return has1m ? 'Opus 4.7 (1M context)' : 'Opus 4.7'
   }
   if (canonical.includes('claude-opus-4-6')) {
-    return has1m ? 'Opus 4.6 (with 1M context)' : 'Opus 4.6'
+    return has1m ? 'Opus 4.6 (1M context)' : 'Opus 4.6'
   }
   if (canonical.includes('claude-opus-4-5')) {
     return 'Opus 4.5'
@@ -632,19 +642,19 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
     return 'Opus 4'
   }
   if (canonical.includes('claude-sonnet-5-5')) {
-    return has1m ? 'Sonnet 5.5 (with 1M context)' : 'Sonnet 5.5'
+    return has1m ? 'Sonnet 5.5 (1M context)' : 'Sonnet 5.5'
   }
   if (canonical.includes('claude-sonnet-5')) {
-    return has1m ? 'Sonnet 5 (with 1M context)' : 'Sonnet 5'
+    return has1m ? 'Sonnet 5 (1M context)' : 'Sonnet 5'
   }
   if (canonical.includes('claude-sonnet-4-6')) {
-    return has1m ? 'Sonnet 4.6 (with 1M context)' : 'Sonnet 4.6'
+    return has1m ? 'Sonnet 4.6 (1M context)' : 'Sonnet 4.6'
   }
   if (canonical.includes('claude-sonnet-4-5')) {
-    return has1m ? 'Sonnet 4.5 (with 1M context)' : 'Sonnet 4.5'
+    return has1m ? 'Sonnet 4.5 (1M context)' : 'Sonnet 4.5'
   }
   if (canonical.includes('claude-sonnet-4')) {
-    return has1m ? 'Sonnet 4 (with 1M context)' : 'Sonnet 4'
+    return has1m ? 'Sonnet 4 (1M context)' : 'Sonnet 4'
   }
   if (canonical.includes('claude-3-7-sonnet')) {
     return 'Claude 3.7 Sonnet'

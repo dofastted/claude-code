@@ -261,10 +261,6 @@ export const PLAN_MODE_ATTACHMENT_CONFIG = {
   FULL_REMINDER_EVERY_N_ATTACHMENTS: 5,
 } as const
 
-export const AUTO_MODE_ATTACHMENT_CONFIG = {
-  TURNS_BETWEEN_ATTACHMENTS: 5,
-  FULL_REMINDER_EVERY_N_ATTACHMENTS: 5,
-} as const
 
 const MAX_MEMORY_LINES = 200
 // Line cap alone doesn't bound size (200 × 500-char lines = 100KB).  The
@@ -1272,64 +1268,14 @@ async function getPlanModeExitAttachment(
   return [{ type: 'plan_mode_exit', planFilePath, planExists }]
 }
 
-function getAutoModeAttachmentTurnCount(messages: Message[]): {
-  turnCount: number
-  foundAutoModeAttachment: boolean
-} {
-  let turnsSinceLastAttachment = 0
-  let foundAutoModeAttachment = false
-
-  // Iterate backwards to find most recent auto_mode attachment.
-  // Count HUMAN turns (non-meta, non-tool-result user messages), not assistant
-  // messages — the tool loop in query.ts calls getAttachmentMessages on every
-  // tool round, so a single human turn with 100 tool calls would fire ~20
-  // reminders if we counted assistant messages. Auto mode's target use case is
-  // long agentic sessions, where this accumulated 60-105× per session.
+function latestAutoModeAttachment(messages: Message[]): 'auto_mode' | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
-
-    if (
-      message?.type === 'user' &&
-      !message.isMeta &&
-      !hasToolResultContent(message.message.content)
-    ) {
-      turnsSinceLastAttachment++
-    } else if (
-      message?.type === 'attachment' &&
-      message.attachment.type === 'auto_mode'
-    ) {
-      foundAutoModeAttachment = true
-      break
-    } else if (
-      message?.type === 'attachment' &&
-      message.attachment.type === 'auto_mode_exit'
-    ) {
-      // Exit resets the throttle — treat as if no prior attachment exists
-      break
-    }
+    if (message?.type !== 'attachment') continue
+    if (message.attachment.type === 'auto_mode') return 'auto_mode'
+    if (message.attachment.type === 'auto_mode_exit') return null
   }
-
-  return { turnCount: turnsSinceLastAttachment, foundAutoModeAttachment }
-}
-
-/**
- * Count auto_mode attachments since the last auto_mode_exit (or from start if no exit).
- * This ensures the full/sparse cycle resets when re-entering auto mode.
- */
-function countAutoModeAttachmentsSinceLastExit(messages: Message[]): number {
-  let count = 0
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]
-    if (message?.type === 'attachment') {
-      if (message.attachment.type === 'auto_mode_exit') {
-        break
-      }
-      if (message.attachment.type === 'auto_mode') {
-        count++
-      }
-    }
-  }
-  return count
+  return null
 }
 
 async function getAutoModeAttachments(
@@ -1346,31 +1292,14 @@ async function getAutoModeAttachments(
     return []
   }
 
-  // Check if we should attach based on turn count (except for first turn)
-  if (messages && messages.length > 0) {
-    const { turnCount, foundAutoModeAttachment } =
-      getAutoModeAttachmentTurnCount(messages)
-    // Only throttle if we've already sent an auto_mode attachment before
-    // On first turn in auto mode, always attach
-    if (
-      foundAutoModeAttachment &&
-      turnCount < AUTO_MODE_ATTACHMENT_CONFIG.TURNS_BETWEEN_ATTACHMENTS
-    ) {
-      return []
-    }
+  // 2.1.310 attaches the full reminder once per auto-mode stretch. A short
+  // reminder every few tool rounds is what shows up as a stack of
+  // "Auto mode still active" system-reminders.
+  if (latestAutoModeAttachment(messages ?? []) === 'auto_mode') {
+    return []
   }
 
-  // Determine if this should be a full or sparse reminder
-  const attachmentCount =
-    countAutoModeAttachmentsSinceLastExit(messages ?? []) + 1
-  const reminderType: 'full' | 'sparse' =
-    attachmentCount %
-      AUTO_MODE_ATTACHMENT_CONFIG.FULL_REMINDER_EVERY_N_ATTACHMENTS ===
-    1
-      ? 'full'
-      : 'sparse'
-
-  return [{ type: 'auto_mode', reminderType }]
+  return [{ type: 'auto_mode', reminderType: 'full' }]
 }
 
 /**

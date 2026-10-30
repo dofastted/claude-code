@@ -3,7 +3,7 @@ import { APIConnectionError, APIConnectionTimeoutError, APIError } from '@anthro
 import { classifyKinJobError, EMPTY_STREAM_MESSAGE } from './jobError.ts'
 
 function apiError(status: number | undefined, type: string, headers: Record<string, string> = {}) {
-  return new APIError(status, { type: 'error', error: { type, message: `${type} body` } }, undefined, headers)
+  return new APIError(status, { type: 'error', error: { type, message: `${type} body` } }, undefined, new Headers(headers))
 }
 
 test('upstream HTTP errors keep their status and Anthropic type', () => {

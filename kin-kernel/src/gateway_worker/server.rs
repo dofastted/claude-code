@@ -26,6 +26,7 @@ use super::error::{WorkerError, truncate};
 use super::hop::{HopClient, HopResponse, copyable_response_header};
 use super::sse::{PumpOptions, PumpResult, pump};
 use crate::provider::Provider;
+use crate::provider::multiplex_cli::telemetry::{MAX_EVENT_BYTES, TelemetryError, TelemetryEvent};
 
 const TRAILER_NAMES: &str = "X-Terminal-State, X-Event-Count, X-Usage, X-Model, X-Stop-Reason";
 
@@ -110,6 +111,10 @@ pub fn router(state: WorkerState) -> Router {
         .route("/internal/health", get(health))
         .route("/internal/v1/messages", post(messages))
         .route("/internal/v1/cancel", post(cancel))
+        .route(
+            "/internal/v1/telemetry/events",
+            post(telemetry_events).layer(DefaultBodyLimit::max(MAX_EVENT_BYTES)),
+        )
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .layer(DefaultBodyLimit::max(limit))
         .with_state(state)
@@ -121,7 +126,7 @@ async fn require_token(
     next: Next,
 ) -> Response {
     let expected = state.config.internal_token.trim();
-    if expected.is_empty() {
+    if expected.is_empty() && request.uri().path() != "/internal/v1/telemetry/events" {
         return next.run(request).await;
     }
     let provided = request
@@ -129,7 +134,7 @@ async fn require_token(
         .get("X-Internal-Token")
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
-    if !token_eq(expected, provided) {
+    if expected.is_empty() || !token_eq(expected, provided) {
         return WorkerError::new(
             StatusCode::UNAUTHORIZED,
             "internal_auth_failed",
@@ -151,6 +156,13 @@ async fn health(State(state): State<WorkerState>) -> Json<Value> {
     };
     let runtime = state.cli.as_ref().and_then(|p| p.memory_snapshot());
     let field = |key: &str| runtime.as_ref().and_then(|v| v.get(key).cloned());
+    let telemetry = match &state.cli {
+        Some(cli) => cli.telemetry_health().await,
+        None => json!({
+            "vm_telemetry": false, "telemetry_ready": false, "telemetry": null,
+            "native_host": null, "capabilities": null,
+        }),
+    };
     Json(json!({
         "ok": ok,
         "engine": "rust",
@@ -176,7 +188,63 @@ async fn health(State(state): State<WorkerState>) -> Json<Value> {
         "cli_version": state.config.cli_version,
         "memory": runtime,
         "classifier_request_context": field("classifier_request_context").unwrap_or(json!(false)),
+        "vm_telemetry": telemetry["vm_telemetry"],
+        "telemetry_ready": telemetry["telemetry_ready"],
+        "telemetry": telemetry["telemetry"],
+        "native_host": telemetry["native_host"],
+        "capabilities": telemetry["capabilities"],
     }))
+}
+
+async fn telemetry_events(
+    State(state): State<WorkerState>,
+    body: Result<Bytes, axum::extract::rejection::BytesRejection>,
+) -> Response {
+    let body = match body {
+        Ok(body) => body,
+        Err(error) => {
+            let (status, code) = if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                (StatusCode::PAYLOAD_TOO_LARGE, "telemetry_event_too_large")
+            } else {
+                (StatusCode::BAD_REQUEST, "invalid_telemetry_event")
+            };
+            return WorkerError::new(status, code, "Invalid telemetry event body").into_response();
+        }
+    };
+    let event = match serde_json::from_slice::<TelemetryEvent>(&body) {
+        Ok(event) => event,
+        Err(_) => {
+            return WorkerError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_telemetry_event",
+                "Invalid telemetry event schema",
+            )
+            .into_response();
+        }
+    };
+    let Some(cli) = &state.cli else {
+        return telemetry_error(TelemetryError::Unsupported).into_response();
+    };
+    match cli.submit_telemetry(event).await {
+        Ok(request_id) => Json(json!({ "ok": true, "request_id": request_id })).into_response(),
+        Err(error) => telemetry_error(error).into_response(),
+    }
+}
+
+fn telemetry_error(error: TelemetryError) -> WorkerError {
+    let status = match &error {
+        TelemetryError::Unsupported | TelemetryError::Unavailable => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        TelemetryError::Busy => StatusCode::TOO_MANY_REQUESTS,
+        TelemetryError::AckTimeout => StatusCode::GATEWAY_TIMEOUT,
+        TelemetryError::Rejected(_) => StatusCode::BAD_GATEWAY,
+    };
+    let mut response = WorkerError::new(status, error.code(), "Telemetry submission failed");
+    if let TelemetryError::Rejected(Some(code)) = error {
+        response.upstream_code = Some(code.as_str().to_owned());
+    }
+    response
 }
 
 /// Explicit client-side cancel from Node. Idempotent; unknown ids are a no-op.
@@ -609,7 +677,9 @@ fn chmod_socket(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        // 0660 lets the slot user and the control-plane group share the socket.
+        // 0600 hides it from the local WSL user that starts the control plane.
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))
             .map_err(|err| format!("chmod socket: {err}"))?;
     }
     let _ = path;

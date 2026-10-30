@@ -67,6 +67,21 @@ test('no-override firstParty public 5.5 supports adaptive, max/xhigh, 1M, 128k, 
   }
 })
 
+test('2.1.303 catalog effort defaults stay off models that reject effort', () => {
+  expect(getDefaultEffortForModel('claude-sonnet-5')).toBe('high')
+  expect(getDefaultEffortForModel('claude-opus-5')).toBe('high')
+  expect(getDefaultEffortForModel('claude-opus-4-8')).toBe('high')
+  expect(getDefaultEffortForModel('claude-fable-5')).toBe('high')
+  expect(getDefaultEffortForModel('claude-fable-5-1')).toBe('high')
+  expect(getDefaultEffortForModel('claude-mythos-5-1')).toBe('high')
+  expect(getDefaultEffortForModel('claude-sonnet-4-6')).toBe('high')
+  expect(getDefaultEffortForModel('claude-opus-4-6')).toBe('xhigh')
+  expect(getDefaultEffortForModel('claude-opus-4-7')).toBe('xhigh')
+  expect(getDefaultEffortForModel('claude-haiku-4-5')).toBeUndefined()
+  expect(getDefaultEffortForModel('claude-sonnet-4-5')).toBeUndefined()
+  expect(getDefaultEffortForModel('claude-mythos-5')).toBeUndefined()
+})
+
 test('max/xhigh are not advertised on unsupported older models', () => {
   expect(modelSupportsXHighEffort('claude-opus-4-6')).toBe(false)
   expect(modelSupportsXHighEffort('claude-sonnet-4-6')).toBe(false)

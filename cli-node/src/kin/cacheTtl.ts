@@ -124,6 +124,40 @@ export function readPanelAutoCompactWindow(path = kernelConfigPath()): number | 
   }
   return lastPanelAutoCompactWindow
 }
+export type CcEntrypoint = 'sdk-cli' | 'cli'
+
+/** Panel `cc_entrypoint`. Missing or invalid stays sdk-cli, matching the shipped default. */
+export function readPanelCcEntrypoint(path = kernelConfigPath()): CcEntrypoint {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !('cc_entrypoint' in parsed)) {
+      return 'sdk-cli'
+    }
+    return parsed.cc_entrypoint === 'cli' ? 'cli' : 'sdk-cli'
+  } catch {
+    return 'sdk-cli'
+  }
+}
+
+const PANEL_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'xhigh', 'max'])
+
+/** Panel model effort. `off` means send no effort; an unknown value is ignored. */
+export function readPanelModelEffort(model: string, path = kernelConfigPath()): string | undefined {
+  const id = String(model || '').trim().toLowerCase()
+  if (!id) return undefined
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !('model_effort' in parsed)) {
+      return undefined
+    }
+    const table = parsed.model_effort
+    if (!table || typeof table !== 'object' || Array.isArray(table)) return undefined
+    const value = table[id]
+    return typeof value === 'string' && PANEL_EFFORTS.has(value) ? value : undefined
+  } catch {
+    return undefined
+  }
+}
 
 
 export function resolveKinCacheTtl(opts: {

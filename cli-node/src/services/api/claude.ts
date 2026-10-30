@@ -44,9 +44,11 @@ import {
 } from '../../constants/prompts.js'
 import {
   readPanelCachedMicrocompactEnabled,
+  readPanelModelEffort,
 } from '../../kin/cacheTtl.js'
 import { mergeOfficialExtraBetas } from '../../kin/officialBetas.js'
 import { assembleMessageRequest } from './requestBody.js'
+import { applyNativeModelPolicy } from '../../kin/nativePolicy.js'
 
 import { assembleApiMetadata } from '../../kin/officialFingerprint.js'
 import {
@@ -103,7 +105,7 @@ import {
 import { resolveAppliedEffort } from '../../utils/effort.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { errorMessage } from '../../utils/errors.js'
-import { computeFingerprintFromMessages } from '../../utils/fingerprint.js'
+import { computeFingerprintFromMessages, computeFingerprintFromWireMessages } from '../../utils/fingerprint.js'
 import { captureAPIRequest, logError } from '../../utils/log.js'
 import {
   createAssistantAPIErrorMessage,
@@ -489,7 +491,7 @@ function should1hCacheTTL(querySource?: QuerySource): boolean {
  * Configure effort parameters for API request.
  *
  */
-function configureEffortParams(
+export function configureEffortParams(
   effortValue: EffortValue | undefined,
   outputConfig: BetaOutputConfig,
   extraBodyParams: Record<string, unknown>,
@@ -1253,7 +1255,7 @@ async function* queryModel(
       options.querySource === 'verification_agent')
   let betas = getMergedBetas(options.model, { isAgenticQuery })
   if (isKinQuerySource(options.querySource)) {
-    betas = mergeOfficialExtraBetas(betas)
+    betas = mergeOfficialExtraBetas(betas, options.model)
   }
 
   // Always send the advisor beta header when advisor is enabled, so
@@ -1448,31 +1450,18 @@ async function* queryModel(
   })
 
   queryCheckpoint('query_message_normalization_start')
-  let messagesForAPI = normalizeMessagesForAPI(messages, filteredTools)
+  // Native hops already carry the caller transcript on wireMessages. The
+  // engine copy is not what gets sent, so don't walk it four more times.
+  const kinWire = Array.isArray(options.wireMessages)
+  let messagesForAPI = kinWire ? [] : normalizeMessagesForAPI(messages, filteredTools)
   queryCheckpoint('query_message_normalization_end')
 
-  // Model-specific post-processing: strip tool-search-specific fields if the
-  // selected model doesn't support tool search.
-  //
-  // Why is this needed in addition to normalizeMessagesForAPI?
-  // - normalizeMessagesForAPI uses isToolSearchEnabledNoModelCheck() because it's
-  //   called from ~20 places (analytics, feedback, sharing, etc.), many of which
-  //   don't have model context. Adding model to its signature would be a large refactor.
-  // - This post-processing uses the model-aware isToolSearchEnabled() check
-  // - This handles mid-conversation model switching (e.g., Sonnet → Haiku) where
-  //   stale tool-search fields from the previous model would cause 400 errors
-  //
-  // Note: For assistant messages, normalizeMessagesForAPI already normalized the
-  // tool inputs, so stripCallerFieldFromAssistantMessage only needs to remove the
-  // 'caller' field (not re-normalize inputs).
-  if (!useToolSearch) {
+  if (!kinWire && !useToolSearch) {
     messagesForAPI = messagesForAPI.map((msg) => {
       switch (msg.type) {
         case 'user':
-          // Strip tool_reference blocks from tool_result content
           return stripToolReferenceBlocksFromUserMessage(msg)
         case 'assistant':
-          // Strip 'caller' field from tool_use blocks
           return stripCallerFieldFromAssistantMessage(msg)
         default:
           return msg
@@ -1480,37 +1469,25 @@ async function* queryModel(
     })
   }
 
-  // Repair tool_use/tool_result pairing mismatches that can occur when resuming
-  // remote/teleport sessions. Inserts synthetic error tool_results for orphaned
-  // tool_uses and strips orphaned tool_results referencing non-existent tool_uses.
-  messagesForAPI = ensureToolResultPairing(messagesForAPI)
-
-  // Strip advisor blocks — the API rejects them without the beta header.
-  if (!betas.includes(ADVISOR_BETA_HEADER)) {
-    messagesForAPI = stripAdvisorBlocks(messagesForAPI)
+  if (!kinWire) {
+    messagesForAPI = ensureToolResultPairing(messagesForAPI)
+    if (!betas.includes(ADVISOR_BETA_HEADER)) {
+      messagesForAPI = stripAdvisorBlocks(messagesForAPI)
+    }
+    messagesForAPI = stripExcessMediaItems(messagesForAPI, API_MAX_MEDIA_PER_REQUEST)
   }
 
-  // Strip excess media items before making the API call.
-  // The API rejects requests with >100 media items but returns a confusing error.
-  // Rather than erroring (which is hard to recover from in Cowork/CCD), we
-  // silently drop the oldest media items to stay within the limit.
-  messagesForAPI = stripExcessMediaItems(
-    messagesForAPI,
-    API_MAX_MEDIA_PER_REQUEST,
-  )
-
-  // Instrumentation: Track message count after normalization
   logEvent('tengu_api_after_normalize', {
-    postNormalizedMessageCount: messagesForAPI.length,
+    postNormalizedMessageCount: kinWire ? options.wireMessages.length : messagesForAPI.length,
   })
 
-  // Compute fingerprint from first user message for attribution.
-  // Must run BEFORE injecting synthetic messages (e.g. deferred tool names)
-  // so the fingerprint reflects the actual user input.
-  const fingerprint = computeFingerprintFromMessages(messagesForAPI)
+  const fingerprint = kinWire
+    ? computeFingerprintFromWireMessages(options.wireMessages)
+    : computeFingerprintFromMessages(messagesForAPI)
   const gates = attributionGates(isClaudeAISubscriber())
   const promptId = randomUUID()
-  const billingIndexes = billingIndexesFromMessages(messagesForAPI) || {}
+  const billingIndexes =
+    billingIndexesFromMessages(kinWire ? options.wireMessages : messagesForAPI) || {}
 
   // When the delta attachment is enabled, deferred tools are announced
   // via persisted deferred_tools_delta attachments instead of this
@@ -1546,8 +1523,12 @@ async function* queryModel(
   const kinSystemLayout = getSystemLayout()
   const kinQuery = isKinQuerySource(options.querySource)
   const preservedOfficial = preserveOfficialSystem(systemPrompt)
+  const bounded = systemPrompt.some((block) => block.trim() === SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
+  const zeroBilling = kinSystemLayout === 'zero' && systemPrompt.some((block) => /prompt_version=</.test(block))
   if (preservedOfficial) {
     systemPrompt = asSystemPrompt(preservedOfficial)
+  } else if (bounded || zeroBilling) {
+    systemPrompt = asSystemPrompt(systemPrompt.filter((block) => block.trim()))
   } else if (kinQuery && options.requestContext) {
     // Classification has its own system contract, independent of panel layout.
     systemPrompt = asSystemPrompt(systemPrompt)
@@ -1666,6 +1647,7 @@ async function* queryModel(
     } as unknown as BetaToolUnion)
   }
   const allTools = [...toolSchemas, ...extraToolSchemas]
+
 
   const isFastMode =
     isFastModeEnabled() &&
@@ -1840,9 +1822,16 @@ async function* queryModel(
         typeof options.wireBody.output_config === 'object' &&
         'effort' in options.wireBody.output_config
       )
-      // Official --print sends medium when the request omits effort.
+      const panelEffort = readPanelModelEffort(options.model)
+      // A panel value wins over the official omitted→medium fallback.
+      // `off` sends no effort parameter.
+      const appliedEffort = callerSetEffort
+        ? effort
+        : panelEffort === 'off'
+          ? undefined
+          : panelEffort ?? effort ?? 'medium'
       configureEffortParams(
-        callerSetEffort ? effort : effort ?? 'medium',
+        appliedEffort,
         outputConfig,
         extraBodyParams,
         betasParams,
@@ -1888,10 +1877,20 @@ async function* queryModel(
 
     // Kin forwards the caller thinking config. Other queries, including real
     // subagents, keep the adaptive-vs-budget selection below.
-    if (options.honorCallerThinking) {
-      // Native jobs already passed model policy in Node. Preserve every wire
-      // thinking field (including display/binding controls), rather than
-      // rebuilding a subset or disabling all Haiku models.
+    if (options.honorCallerThinking && options.wireBody && options.requestContext) {
+      thinking = options.wireThinking as BetaMessageStreamParams['thinking']
+    } else if (options.honorCallerThinking && options.wireBody) {
+      const hadThinking = Object.hasOwn(options.wireBody, 'thinking')
+      const hadTools = Object.hasOwn(options.wireBody, 'tools')
+      const hadChoice = Object.hasOwn(options.wireBody, 'tool_choice')
+      if (hadThinking) options.wireBody.thinking = options.wireThinking
+      if (hadTools) options.wireBody.tools = allTools
+      if (hadChoice) options.wireBody.tool_choice = options.toolChoice
+      applyNativeModelPolicy(options.wireBody)
+      if (hadThinking) options.wireThinking = options.wireBody.thinking
+      if (hadChoice) options.toolChoice = options.wireBody.tool_choice as typeof options.toolChoice
+      if (hadTools) allTools.splice(0, allTools.length, ...((options.wireBody.tools as BetaToolUnion[]) || []))
+      if (!outputConfig.effort && modelSupportsEffort(options.model)) outputConfig.effort = 'medium'
       thinking = options.wireThinking as BetaMessageStreamParams['thinking']
     } else if (hasThinking && modelSupportsThinking(options.model)) {
       let useAdaptive = modelSupportsAdaptiveThinking(options.model)
@@ -2100,7 +2099,7 @@ async function* queryModel(
 
     const gatedBetas = withRequestProtocolBetas(requestBetas, params)
     params.betas = isKinQuerySource(options.querySource)
-      ? mergeOfficialExtraBetas(gatedBetas)
+      ? mergeOfficialExtraBetas(gatedBetas, options.model)
       : gatedBetas
     lastRequestBetas = params.betas
     assembledRequest.current?.(params)

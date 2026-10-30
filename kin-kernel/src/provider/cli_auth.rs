@@ -1,9 +1,12 @@
 //! Claude Code auth for kernel-spawned CLI.
 //!
 //! Two supported modes:
-//! - **subscriber oauth**: `.credentials.json` `claudeAiOauth`. `CLAUDE_CODE_OAUTH_TOKEN`
-//!   is stripped so the CLI reads the file; it never refreshes (the supervisor sets
-//!   `CLAUDE_CODE_HOST_REFRESH`), the host's Go Refresher rotates the RT.
+//! - **subscriber oauth**: host `credentials.json` `claudeAiOauth`. With
+//!   `CLAUDE_CODE_HOST_REFRESH` the CLI reads that file, not a sibling
+//!   `.credentials.json` that can still hold the previous refresh token.
+//!   `CLAUDE_CODE_OAUTH_TOKEN` is stripped so the CLI reads the file; it never
+//!   refreshes (the supervisor sets `CLAUDE_CODE_HOST_REFRESH`), the host's
+//!   Go Refresher rotates the RT.
 //! - **setup-token**: `claude setup-token` / inference-only oat. Injected as
 //!   `CLAUDE_CODE_OAUTH_TOKEN`. No refresh. Local MCP still works; Remote Control
 //!   and `user:sessions:claude_code` do not.

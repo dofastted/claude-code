@@ -28,16 +28,19 @@ export const OFFICIAL_EXTRA_BETAS = [
   'cache-diagnosis-2026-04-07',
 ] as const
 
-export function mergeOfficialExtraBetas(betas: string[]): string[] {
-  const have = [...betas]
-  for (const beta of OFFICIAL_MESSAGE_BETAS) {
-    // claude-code-20250219 is a session beta. Setup-token inference rejects it.
-    if (beta === 'claude-code-20250219') continue
-    if (!have.includes(beta)) have.push(beta)
-  }
+export function mergeOfficialExtraBetas(betas: string[], model = ''): string[] {
+  const have = betas.filter(Boolean)
+  const canonical = model.toLowerCase()
+  const order = canonical.includes('haiku')
+    ? [
+        ...OFFICIAL_MESSAGE_BETAS.slice(1, 6),
+        OFFICIAL_MESSAGE_BETAS[0],
+        ...OFFICIAL_MESSAGE_BETAS.slice(6),
+      ]
+    : OFFICIAL_MESSAGE_BETAS
   const out: string[] = []
-  for (const beta of OFFICIAL_MESSAGE_BETAS) {
-    if (have.includes(beta)) out.push(beta)
+  for (const beta of order) {
+    if (have.includes(beta) && !out.includes(beta)) out.push(beta)
   }
   for (const beta of have) {
     if (!out.includes(beta)) out.push(beta)

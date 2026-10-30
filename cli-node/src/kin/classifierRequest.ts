@@ -26,6 +26,8 @@ export function classifierSystemBlocks(system: unknown, attribution: string): Te
   const blocks: TextBlockParam[] = typeof system === 'string'
     ? [{ type: 'text', text: system }]
     : Array.isArray(system) ? structuredClone(system) : []
+  // Node already supplies billing when native attribution is disabled by slot policy.
+  if (!attribution) return blocks
   const kept = blocks.filter(b => !/^x-anthropic-billing-header:/i.test(b.text.trimStart()))
   return attribution ? [{ type: 'text', text: attribution }, ...kept] : kept
 }

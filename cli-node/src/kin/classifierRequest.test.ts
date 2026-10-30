@@ -6,7 +6,7 @@ test('classifier system retains blocks, whitespace and cache independent of layo
   const out = classifierSystemBlocks(system, 'x-anthropic-billing-header: new;')
   expect(out).toEqual([{ type: 'text', text: 'x-anthropic-billing-header: new;' }, system[1]])
   expect(system[0].text).toContain('old')
-  expect(classifierSystemBlocks(system, '')).toEqual([system[1]])
+  expect(classifierSystemBlocks(system, '')).toEqual(system)
 })
 test('context rejects unknown enums, fields and body mismatch', () => {
   const context = { purpose: 'auto_mode_classifier', format: 'xml', stage: 'xml_s1' }

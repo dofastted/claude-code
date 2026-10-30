@@ -657,7 +657,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
 
       // Allowlisted tools are safe and don't need YOLO classification.
       // This uses the safe-tool allowlist to skip unnecessary classifier API calls.
-      if (classifierDecisionModule!.isAutoModeAllowlistedTool(tool.name)) {
+      if (classifierDecisionModule!.isAutoModeAllowlistedTool(tool, input)) {
         const newDenialState = recordSuccess(denialState)
         persistDenialState(context, newDenialState)
         logForDebugging(
@@ -696,9 +696,27 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
           context.options.tools,
           appState.toolPermissionContext,
           context.abortController.signal,
+          { classifierOnly: tool.classifierOnly?.() === true },
         )
       } finally {
         clearClassifierChecking(toolUseID)
+      }
+
+      if (tool.classifierOnly?.() === true && classifierResult.classifierRan === false) {
+        logForDebugging(
+          `${tool.name} declares classifierOnly() but serialized to an empty classifier action; denying`,
+          { level: 'error' },
+        )
+        return {
+          behavior: 'deny',
+          decisionReason: {
+            type: 'classifier',
+            classifier: 'auto-mode',
+            reason: classifierResult.reason,
+            noVerdict: true,
+          },
+          message: `${tool.name} was not reviewed: it gave the auto mode classifier nothing to judge (its toAutoClassifierInput is empty), and only the classifier can allow it. This is a tool bug, not a judgment on the action.`,
+        }
       }
 
       // Notify ants when classifier error dumped prompts (will be in /share)
@@ -820,6 +838,18 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         // error, won't recover on retry. Skip iron_gate and fall back to
         // normal prompting so the user can approve/deny manually.
         if (classifierResult.transcriptTooLong) {
+          if (tool.classifierOnly?.() === true) {
+            return {
+              behavior: 'deny',
+              decisionReason: {
+                type: 'classifier',
+                classifier: 'auto-mode',
+                reason: classifierResult.reason,
+                noVerdict: true,
+              },
+              message: `${tool.name} was not reviewed: the auto mode classifier transcript exceeded its context window, and no permission prompt is raised for this tool. This is not a judgment that the action is unsafe; the same call will hit the same limit until the conversation is shorter.`,
+            }
+          }
           if (appState.toolPermissionContext.shouldAvoidPermissionPrompts) {
             // Permanent condition (transcript only grows) — deny-retry-deny
             // wastes tokens without ever hitting the denial-limit abort.
@@ -838,6 +868,43 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
               reason:
                 'Auto mode classifier transcript exceeded context window — falling back to manual approval',
             },
+          }
+        }
+        if (classifierResult.refusedBySafeguard) {
+          if (appState.toolPermissionContext.shouldAvoidPermissionPrompts) {
+            throw new AbortError(
+              'Agent aborted: auto mode classifier request refused by the safety safeguard in headless mode',
+            )
+          }
+          logForDebugging(
+            'Auto mode classifier request refused by the safety safeguard, denying (exempt from the denial counter)',
+            { level: 'warn' },
+          )
+          return {
+            behavior: 'deny',
+            decisionReason: {
+              type: 'classifier',
+              classifier: 'auto-mode',
+              reason: classifierResult.reason,
+              noVerdict: true,
+            },
+            message: classifierResult.reason,
+          }
+        }
+        if (classifierResult.failureMode !== undefined) {
+          logForDebugging(
+            `Auto mode classifier produced no verdict (${classifierResult.failureMode}), denying`,
+            { level: 'warn' },
+          )
+          return {
+            behavior: 'deny',
+            decisionReason: {
+              type: 'classifier',
+              classifier: 'auto-mode',
+              reason: classifierResult.reason,
+              noVerdict: true,
+            },
+            message: classifierResult.reason,
           }
         }
         // When classifier is unavailable (API error), behavior depends on

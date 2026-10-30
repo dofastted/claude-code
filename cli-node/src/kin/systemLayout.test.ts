@@ -8,7 +8,9 @@ import {
   layoutSystemBlocks,
   leftoverFromSystemPrompt,
   wireSystemBlocks,
+  preserveOfficialSystem,
 } from './systemLayout.ts'
+import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY, SYSTEM_PROMPT_REPORTING_OUTCOMES } from '../constants/prompts.ts'
 
 let savedEnv: NodeJS.ProcessEnv
 beforeEach(() => {
@@ -138,6 +140,33 @@ test('leftover drops only owned slot personas alongside caller text', () => {
       CALLER,
     ]),
   ).toBe(CALLER)
+})
+
+test('303 system keeps the panel boundary between harness and guidance', () => {
+  const billing = 'x-anthropic-billing-header: cc_version=2.1.303; cc_entrypoint=sdk-cli; cch=abcde;'
+  const harness = '\nYou are an agent working with the user toward their goals'
+  const guidance = 'Write code that reads like the surrounding code'
+  const out = preserveOfficialSystem([billing, IDENTITY, harness, SYSTEM_PROMPT_DYNAMIC_BOUNDARY, guidance])
+  expect(out?.[2]).toBe(harness)
+  expect(out?.[3]).toBe(SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
+  expect(out?.[4]).toBe(guidance)
+  expect(out?.[0]).toContain('cch=00000')
+})
+
+test('old reporting shape still inserts the boundary after four blocks', () => {
+  const out = preserveOfficialSystem([
+    'x-anthropic-billing-header: cc_version=2.1.296;',
+    IDENTITY,
+    SYSTEM_PROMPT_REPORTING_OUTCOMES,
+    'static',
+    'dynamic',
+  ])
+  expect(out?.slice(2, 6)).toEqual([
+    SYSTEM_PROMPT_REPORTING_OUTCOMES,
+    'static',
+    SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+    'dynamic',
+  ])
 })
 
 test('billed wire systems preserve caller blocks and cache markers while CCH is normalized', () => {

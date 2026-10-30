@@ -7,6 +7,7 @@
 //! `hello` handshake and no in-CLI tool parking (`tool_result`,
 //! `job_parked`) — those were protocol v1 relics.
 
+use super::telemetry::{SafeCode, TelemetryEvent, TelemetryState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -16,12 +17,14 @@ pub const CAPABILITIES: &[&str] = &["multi_slot", "native_sse", "stateless"];
 /// acks every `cancel`. Only such a host is probed for liveness.
 pub const CAP_PING: &str = "ping";
 pub const CAP_CLASSIFIER: &str = "classifier_request_context";
+pub const CAP_VM_TELEMETRY: &str = "vm_telemetry";
 
-/// Hard caps on CLI stdout: a single line longer than this is dropped, and a
-/// job whose cumulative stdout exceeds `MAX_JOB_BYTES` stops being decoded so
-/// one runaway job cannot starve the others sharing the CLI process.
-pub const MAX_LINE_BYTES: usize = 2 * 1024 * 1024;
-pub const MAX_JOB_BYTES: usize = 32 * 1024 * 1024;
+/// Hard caps on CLI stdout. One line or one job may carry a config item
+/// with an image; the control plane's response ceiling is 64 MiB.
+/// A longer line is dropped, and a job past the cumulative cap stops being
+/// decoded so it cannot starve the other slots.
+pub const MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_JOB_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -42,6 +45,11 @@ pub enum StdinFrame {
     },
     #[serde(rename = "ping")]
     Ping { nonce: String },
+    #[serde(rename = "telemetry_event")]
+    TelemetryEvent {
+        request_id: uuid::Uuid,
+        event: TelemetryEvent,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -97,6 +105,15 @@ pub enum StdoutFrame {
     CancelAck { job_id: String, slot_id: String },
     #[serde(rename = "pong")]
     Pong { nonce: String },
+    #[serde(rename = "telemetry_ack")]
+    TelemetryAck {
+        request_id: uuid::Uuid,
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<SafeCode>,
+    },
+    #[serde(rename = "telemetry_state")]
+    TelemetryState { state: TelemetryState },
 }
 
 pub fn encode_stdin(frame: &StdinFrame) -> Result<Vec<u8>, String> {
@@ -122,6 +139,14 @@ pub fn slot_id(index: usize) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn config_image_frame_fits_through_64mib() {
+        let image_frame = 2 * 1024 * 1024 + 1;
+        assert!(image_frame <= MAX_LINE_BYTES);
+        assert_eq!(MAX_LINE_BYTES, 64 * 1024 * 1024);
+        assert_eq!(MAX_JOB_BYTES, MAX_LINE_BYTES);
+    }
 
     #[test]
     fn roundtrip_job_start() {

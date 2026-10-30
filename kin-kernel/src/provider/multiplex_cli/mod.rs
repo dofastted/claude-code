@@ -12,6 +12,7 @@ pub mod native_protocol;
 pub mod scheduler;
 pub mod slot;
 pub mod supervisor;
+pub mod telemetry;
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -64,6 +65,26 @@ fn serialized_request_bytes(request: &MessageRequest) -> Result<usize, KernelErr
     serde_json::to_writer(&mut counter, request)
         .map_err(|_| KernelError::Provider("unable to measure request size".into()))?;
     Ok(counter.0.saturating_add(1024))
+}
+
+fn json_byte_len(value: &serde_json::Value) -> Result<usize, KernelError> {
+    struct ByteCounter(usize);
+    impl std::io::Write for ByteCounter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .ok_or_else(|| std::io::Error::other("request size overflow"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = ByteCounter(0);
+    serde_json::to_writer(&mut counter, value)
+        .map_err(|_| KernelError::Provider("unable to measure request size".into()))?;
+    Ok(counter.0)
 }
 
 #[derive(Clone)]
@@ -189,6 +210,9 @@ pub struct Runtime {
     jobs: Mutex<HashMap<String, Job>>,
     sinks: Mutex<HashMap<String, JobSink>>,
     job_sizes: Mutex<HashMap<String, usize>>,
+    stdout_bytes: Mutex<HashMap<String, usize>>,
+    /// Planned idle RSS recycle. Not an L3 crash and not counted in `cli_restarts`.
+    mem_recycling: AtomicBool,
     /// Boxed rather than `ChildStdin` so the simulated CLI can be driven
     /// over an in-memory pipe on exactly the same code path.
     cli_stdin: Mutex<Option<Box<dyn tokio::io::AsyncWrite + Send + Unpin>>>,
@@ -219,6 +243,8 @@ pub struct Runtime {
     closed_count: AtomicUsize,
     me: Weak<Runtime>,
     frame_gate: Mutex<()>,
+    telemetry: Mutex<telemetry::TelemetryTracking>,
+    telemetry_submissions: Arc<tokio::sync::Semaphore>,
     /// Bumped per CLI process; frames and exits of an older process are ignored.
     host_gen: AtomicU64,
     child_kill: Mutex<Option<oneshot::Sender<()>>>,
@@ -259,7 +285,7 @@ struct Probe {
 }
 
 const JOB_SINK_ITEMS: usize = 256;
-const JOB_SINK_BYTES: usize = 2 * 1024 * 1024;
+const JOB_SINK_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, serde::Serialize)]
 struct NativeHostInfo {
@@ -444,6 +470,8 @@ impl Runtime {
             jobs: Mutex::new(HashMap::new()),
             sinks: Mutex::new(HashMap::new()),
             job_sizes: Mutex::new(HashMap::new()),
+            stdout_bytes: Mutex::new(HashMap::new()),
+            mem_recycling: AtomicBool::new(false),
             cli_stdin: Mutex::new(None),
             memory: MemoryGuard::from_env(),
             running: AtomicUsize::new(0),
@@ -462,6 +490,10 @@ impl Runtime {
             me: me.clone(),
             host_gen: AtomicU64::new(0),
             frame_gate: Mutex::new(()),
+            telemetry: Mutex::new(telemetry::TelemetryTracking::default()),
+            telemetry_submissions: Arc::new(tokio::sync::Semaphore::new(
+                telemetry::MAX_PENDING_ACKS,
+            )),
             child_kill: Mutex::new(None),
             epoch: Instant::now(),
             last_frame_ms: AtomicU64::new(0),
@@ -485,6 +517,10 @@ impl Runtime {
         let generation = {
             let _gate = self.frame_gate.lock().await;
             let generation = self.host_gen.fetch_add(1, Ordering::AcqRel) + 1;
+            self.clear_telemetry().await;
+            *self.native_host.lock().await = None;
+            self.classifier_context_supported
+                .store(false, Ordering::Relaxed);
             self.note_frame();
             self.host_unavailable.store(false, Ordering::Release);
             generation
@@ -521,8 +557,8 @@ impl Runtime {
     /// resend the cancel; L3 restart the CLI when closed slots leave it
     /// useless; L2 probe a CLI that may have stopped reading stdin.
     async fn watchdog_sweep(&self) {
-        if self.host_unavailable() {
-            // A restart is scheduled, or the budget is spent and health says so.
+        if self.mem_recycling.load(Ordering::Relaxed) || self.host_unavailable() {
+            // A restart is scheduled, a memory recycle is in progress, or the budget is spent.
             return;
         }
         let now = Instant::now();
@@ -612,6 +648,81 @@ impl Runtime {
         }
         self.retire_idle().await;
         self.probe_tick(now).await;
+        self.shed_largest_job().await;
+        if self.running_jobs() == 0
+            && let Some(me) = self.me.upgrade()
+        {
+            tokio::spawn(async move {
+                me.recycle_for_memory().await;
+            });
+        }
+    }
+
+    async fn note_stdout(&self, job_id: &str, bytes: usize) {
+        let mut accounted = self.stdout_bytes.lock().await;
+        let entry = accounted.entry(job_id.to_string()).or_insert(0);
+        *entry = entry.saturating_add(bytes);
+    }
+
+    async fn shed_largest_job(&self) {
+        let snap = self.memory.snapshot();
+        if snap.observed_bytes < snap.reject_bytes || self.running_jobs() == 0 {
+            return;
+        }
+        let sizes = self.job_sizes.lock().await.clone();
+        let stdout = self.stdout_bytes.lock().await.clone();
+        let best = {
+            let jobs = self.jobs.lock().await;
+            let mut best: Option<(String, usize)> = None;
+            for job in jobs.values() {
+                let score = sizes.get(&job.job_id).copied().unwrap_or(0)
+                    + stdout.get(&job.job_id).copied().unwrap_or(0);
+                if best.as_ref().is_none_or(|(_, current)| score > *current) {
+                    best = Some((job.job_id.clone(), score));
+                }
+            }
+            best
+        };
+        let Some((job_id, _)) = best else {
+            return;
+        };
+        let sink = self.sinks.lock().await.get(&job_id).cloned();
+        let failure = JobFailure {
+            retry_after: Some("2".into()),
+            ..JobFailure::new("overloaded", 503, "api_error", "runtime overloaded")
+        };
+        let error = KernelError::Job(failure);
+        if let Some(sink) = sink {
+            sink.set_terminal(Terminal::Failed(error));
+        }
+    }
+
+    async fn recycle_for_memory(self: &Arc<Self>) {
+        if self.running_jobs() != 0
+            || self.recovering.load(Ordering::Relaxed)
+            || self
+                .gave_up
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .is_some()
+        {
+            return;
+        }
+        if self.mem_recycling.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let snap = self.memory.snapshot();
+        if snap.observed_bytes < snap.drain_bytes {
+            self.mem_recycling.store(false, Ordering::Release);
+            return;
+        }
+        if let Some(kill) = self.child_kill.lock().await.take() {
+            let _ = kill.send(());
+        }
+        if let Err(err) = self.spawn_host().await {
+            tracing::error!(%err, "idle memory recycle failed to spawn cli");
+        }
+        self.mem_recycling.store(false, Ordering::Release);
     }
 
     /// L2: ask the CLI's stdin loop for a pong. A process that stays alive but
@@ -766,7 +877,7 @@ impl Runtime {
             self.cfg.simulate_latency,
             self.cfg.desired_config_hash.clone(),
         ));
-        bootstrap::wait_ready(self, self.cfg.slot_count, Duration::from_secs(5)).await
+        self.wait_host_ready(Duration::from_secs(5)).await
     }
 
     async fn start_claude(self: &Arc<Self>, generation: u64) -> Result<(), KernelError> {
@@ -848,7 +959,20 @@ impl Runtime {
         });
         tracing::info!(pid = supervised.pid, "claude supervisor alive");
         let wait = Duration::from_secs((120 + 8 * self.cfg.slot_count as u64).min(240));
-        bootstrap::wait_ready(self, self.cfg.slot_count, wait).await
+        self.wait_host_ready(wait).await
+    }
+
+    async fn wait_host_ready(&self, max_wait: Duration) -> Result<(), KernelError> {
+        tokio::time::timeout(max_wait, async {
+            loop {
+                if !self.host_unavailable() && self.native_host.lock().await.is_some() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .map_err(|_| KernelError::Provider("timed out waiting for native host readiness".into()))
     }
 
     pub fn ready_slots(&self) -> usize {
@@ -876,6 +1000,7 @@ impl Runtime {
         if first {
             tracing::error!(%reason, "native cli host unavailable");
         }
+        self.clear_telemetry().await;
         self.pid.store(0, Ordering::Relaxed);
         self.memory.set_claude_pid(0);
         self.ready.store(0, Ordering::Relaxed);
@@ -1046,6 +1171,7 @@ impl Runtime {
         if let Some(size) = self.job_sizes.lock().await.remove(job_id) {
             self.memory.end(size);
         }
+        self.stdout_bytes.lock().await.remove(job_id);
         if let Some(slot_id) = slot_id {
             if self.host_unavailable() {
                 self.retire_slot(&slot_id).await;
@@ -1173,6 +1299,12 @@ impl Runtime {
                         .any(|cap| cap == native_protocol::CAP_CLASSIFIER),
                     Ordering::Relaxed,
                 );
+                self.telemetry_capability(
+                    capabilities
+                        .iter()
+                        .any(|cap| cap == native_protocol::CAP_VM_TELEMETRY),
+                )
+                .await;
                 *self.native_host.lock().await = Some(NativeHostInfo {
                     protocol_version,
                     slots,
@@ -1293,6 +1425,16 @@ impl Runtime {
                     *probe = None;
                 }
             }
+            native_protocol::StdoutFrame::TelemetryAck {
+                request_id,
+                ok,
+                error,
+            } => {
+                self.telemetry_ack(request_id, ok, error).await;
+            }
+            native_protocol::StdoutFrame::TelemetryState { state } => {
+                self.telemetry_state(state).await;
+            }
         }
     }
 
@@ -1371,17 +1513,43 @@ impl Runtime {
     /// Any failure here means the CLI cannot take input any more (closed
     /// pipe, or a pipe it stopped draining): restart it (L3).
     async fn write_cli_stdin(&self, frame: native_protocol::StdinFrame) -> Result<(), KernelError> {
-        self.host_available()?;
+        self.write_cli_stdin_for_generation(frame, None).await
+    }
+
+    async fn write_cli_stdin_for_generation(
+        &self,
+        frame: native_protocol::StdinFrame,
+        generation: Option<u64>,
+    ) -> Result<(), KernelError> {
         let line = native_protocol::encode_stdin(&frame).map_err(KernelError::Provider)?;
+        self.write_stdin_line_for_generation(&line, generation)
+            .await
+    }
+
+    async fn write_stdin_line(&self, line: &[u8]) -> Result<(), KernelError> {
+        self.write_stdin_line_for_generation(line, None).await
+    }
+
+    async fn write_stdin_line_for_generation(
+        &self,
+        line: &[u8],
+        generation: Option<u64>,
+    ) -> Result<(), KernelError> {
+        self.host_available()?;
         let limit = self.cfg.recovery.stdin_write_timeout;
         let write = async {
             use tokio::io::AsyncWriteExt;
             let mut guard = self.cli_stdin.lock().await;
+            if let Some(expected) = generation
+                && (self.host_gen.load(Ordering::Acquire) != expected || self.host_unavailable())
+            {
+                return Err("native cli generation replaced".to_string());
+            }
             let Some(stdin) = guard.as_mut() else {
                 return Err("native cli stdin closed".to_string());
             };
             stdin
-                .write_all(&line)
+                .write_all(line)
                 .await
                 .map_err(|err| format!("native stdin: {err}"))?;
             stdin
@@ -1394,7 +1562,11 @@ impl Runtime {
             Ok(Err(reason)) => reason,
             Err(_) => format!("native stdin write blocked for {}s", limit.as_secs()),
         };
-        self.request_restart(reason.clone()).await;
+        if let Some(generation) = generation {
+            self.host_lost(generation, reason.clone()).await;
+        } else {
+            self.request_restart(reason.clone()).await;
+        }
         Err(KernelError::Job(JobFailure::kernel_unavailable(reason)))
     }
 
@@ -1458,6 +1630,7 @@ impl Runtime {
         if let Some(size) = self.job_sizes.lock().await.remove(job_id) {
             self.memory.end(size);
         }
+        self.stdout_bytes.lock().await.remove(job_id);
         let Some(job) = job else {
             return;
         };
@@ -1568,16 +1741,16 @@ impl Runtime {
         tx: StreamTx,
     ) -> Result<(), KernelError> {
         self.host_available()?;
+        let mut request_value = serde_json::to_value(&request).map_err(|_| {
+            KernelError::Job(JobFailure::new(
+                "invalid_request_context",
+                400,
+                "invalid_request_error",
+                "Invalid classifier body",
+            ))
+        })?;
         if let Some(purpose) = &context.request_context {
-            let body = serde_json::to_value(&request).map_err(|_| {
-                KernelError::Job(JobFailure::new(
-                    "invalid_request_context",
-                    400,
-                    "invalid_request_error",
-                    "Invalid classifier body",
-                ))
-            })?;
-            if !purpose.validate(&body) {
+            if !purpose.validate(&request_value) {
                 return Err(KernelError::Job(JobFailure::new(
                     "invalid_request_context",
                     400,
@@ -1594,8 +1767,19 @@ impl Runtime {
                 )));
             }
         }
-        let request_bytes = serialized_request_bytes(&request)?;
-        let reservation = self.memory.reserve(request_bytes)?;
+        if let Some(window) = context.auto_compact_window
+            && let Some(obj) = request_value.as_object_mut()
+        {
+            obj.insert("auto_compact_window".to_string(), json!(window));
+        }
+        if let Some(obj) = request_value.as_object_mut() {
+            obj.insert("wireMessages".to_string(), json!(true));
+            obj.remove("settings");
+            obj.remove("env");
+        }
+        let body_bytes = json_byte_len(&request_value)?;
+        self.memory.preflight(body_bytes, body_bytes)?;
+        let mut request = request;
         let deadline = tokio::time::Instant::now() + self.cfg.submit_wait;
         let (slot_id, job_id) = loop {
             if self.submission_cancelled(&context.request_id, &tx).await {
@@ -1636,6 +1820,32 @@ impl Runtime {
                 }
             }
         };
+        let request_context = context.request_context.clone();
+        let frame = native_protocol::StdinFrame::JobStart {
+            request_context,
+            job_id: job_id.clone(),
+            slot_id: slot_id.clone(),
+            request: request_value,
+        };
+        let line = native_protocol::encode_stdin(&frame).map_err(KernelError::Provider)?;
+        if let Err(err) = self.memory.preflight(line.len(), body_bytes) {
+            self.register_native_ready(slot_id).await;
+            return Err(err);
+        }
+        let reservation = match self.memory.reserve(line.len()) {
+            Ok(reservation) => reservation,
+            Err(err) => {
+                self.register_native_ready(slot_id).await;
+                return Err(err);
+            }
+        };
+        // The stdin line is the copy the CLI parses. Keep only the model here.
+        request.messages.clear();
+        request.system = None;
+        request.tools.clear();
+        request.thinking = None;
+        request.tool_choice = None;
+        request.extra.clear();
         let job = Job {
             request_context: context.request_context.clone(),
             job_id: job_id.clone(),
@@ -1644,21 +1854,6 @@ impl Runtime {
             request_id: context.request_id.clone(),
             cli_done: false,
         };
-        let mut request_value = serde_json::to_value(&job.request).unwrap_or_else(|_| json!({}));
-        let request_context = job.request_context.clone();
-        if let Some(window) = context.auto_compact_window {
-            if let Some(obj) = request_value.as_object_mut() {
-                obj.insert("auto_compact_window".to_string(), json!(window));
-            }
-        }
-        // Patched cli-node skips addCacheBreakpoints when this is set, so it
-        // does not insert a ttl-less tool marker (Anthropic reads that as 5m)
-        // in front of the settings TTL.
-        if let Some(obj) = request_value.as_object_mut() {
-            obj.insert("wireMessages".to_string(), json!(true));
-            obj.remove("settings");
-            obj.remove("env");
-        }
         self.jobs.lock().await.insert(job_id.clone(), job);
         self.job_seen
             .lock()
@@ -1668,19 +1863,11 @@ impl Runtime {
         self.job_sizes
             .lock()
             .await
-            .insert(job_id.clone(), request_bytes);
+            .insert(job_id.clone(), line.len());
         reservation.commit();
         let n = self.running.fetch_add(1, Ordering::Relaxed) + 1;
         self.peak_running.fetch_max(n, Ordering::Relaxed);
-        if let Err(err) = self
-            .write_cli_stdin(native_protocol::StdinFrame::JobStart {
-                request_context,
-                job_id: job_id.clone(),
-                slot_id,
-                request: request_value,
-            })
-            .await
-        {
+        if let Err(err) = self.write_stdin_line(&line).await {
             self.jobs.lock().await.remove(&job_id);
             self.job_seen.lock().await.remove(&job_id);
             self.sinks.lock().await.remove(&job_id);
@@ -1688,13 +1875,16 @@ impl Runtime {
             if let Some(size) = self.job_sizes.lock().await.remove(&job_id) {
                 self.memory.end(size);
             }
+            self.stdout_bytes.lock().await.remove(&job_id);
             self.running
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                     Some(n.saturating_sub(1))
                 })
                 .ok();
+            self.register_native_ready(slot_id).await;
             return Err(err);
         }
+        drop(line);
         let cancelled = !context.request_id.is_empty()
             && self
                 .cancelled_requests
@@ -2021,6 +2211,17 @@ async fn simulated_cli(
                 let _ =
                     write_sim_frame(&writer, &native_protocol::StdoutFrame::Pong { nonce }).await;
             }
+            native_protocol::StdinFrame::TelemetryEvent { request_id, .. } => {
+                let _ = write_sim_frame(
+                    &writer,
+                    &native_protocol::StdoutFrame::TelemetryAck {
+                        request_id,
+                        ok: false,
+                        error: None,
+                    },
+                )
+                .await;
+            }
         }
     }
 }
@@ -2252,12 +2453,6 @@ async fn decode_stdout(
     use tokio::io::{AsyncBufReadExt, BufReader};
     let mut lines = BufReader::new(stdout).lines();
     let mut job_bytes: HashMap<String, usize> = HashMap::new();
-    let mut dump = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/live/claude.multiplex.stdout.log")
-        .await
-        .ok();
     loop {
         let line = match lines.next_line().await {
             Ok(Some(line)) => line,
@@ -2280,21 +2475,17 @@ async fn decode_stdout(
             return;
         }
         runtime.note_frame();
-        if let Some(file) = dump.as_mut() {
-            use tokio::io::AsyncWriteExt;
-            let _ = file.write_all(line.as_bytes()).await;
-            let _ = file.write_all(b"\n").await;
-        }
         if line.len() > native_protocol::MAX_LINE_BYTES {
             continue;
         }
         let Ok(frame) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if let Some(key) = frame.get("job_id").and_then(Value::as_str)
-            && charge_job_bytes(&mut job_bytes, key, line.len())
-        {
-            continue;
+        if let Some(key) = frame.get("job_id").and_then(Value::as_str) {
+            runtime.note_stdout(key, line.len()).await;
+            if charge_job_bytes(&mut job_bytes, key, line.len()) {
+                continue;
+            }
         }
         runtime.handle_cli_frame(frame).await;
     }
@@ -2350,6 +2541,31 @@ impl MultiplexCliProvider {
         match self.runtime.get() {
             Some(runtime) => runtime.cancel_request(request_id).await,
             None => false,
+        }
+    }
+
+    pub async fn submit_telemetry(
+        &self,
+        event: telemetry::TelemetryEvent,
+    ) -> Result<Uuid, telemetry::TelemetryError> {
+        let runtime = self
+            .runtime
+            .get()
+            .ok_or(telemetry::TelemetryError::Unavailable)?;
+        runtime
+            .queue_telemetry(event)
+            .await?
+            .await
+            .map_err(|_| telemetry::TelemetryError::Unavailable)?
+    }
+
+    pub async fn telemetry_health(&self) -> Value {
+        match self.runtime.get() {
+            Some(runtime) => runtime.telemetry_health().await,
+            None => json!({
+                "vm_telemetry": false, "telemetry_ready": false, "telemetry": null,
+                "native_host": null, "capabilities": null,
+            }),
         }
     }
     async fn runtime(&self) -> Result<&Arc<Runtime>, KernelError> {

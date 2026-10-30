@@ -7,6 +7,7 @@ use std::sync::{
     Mutex,
     atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -137,8 +138,18 @@ pub struct MemoryGuard {
     pending: AtomicUsize,
     claude_pid: AtomicU32,
     rss_override: AtomicU64,
+    idle_rss: AtomicU64,
+    os_cache: Mutex<Option<OsSample>>,
     #[cfg(test)]
     limit_override: AtomicU64,
+}
+
+struct OsSample {
+    at: Instant,
+    kernel: u64,
+    claude: u64,
+    cgroup: u64,
+    limit: Option<u64>,
 }
 
 pub struct MemoryReservation<'a> {
@@ -170,6 +181,8 @@ impl MemoryGuard {
             pending: AtomicUsize::new(0),
             claude_pid: AtomicU32::new(0),
             rss_override: AtomicU64::new(0),
+            idle_rss: AtomicU64::new(0),
+            os_cache: Mutex::new(None),
             #[cfg(test)]
             limit_override: AtomicU64::new(0),
         }
@@ -205,12 +218,13 @@ impl MemoryGuard {
     }
 
     pub fn snapshot(&self) -> MemorySnapshot {
-        let cgroup_limit = self.cgroup_limit();
+        let (kernel, claude, cgroup, mut cgroup_limit) = self.cached_os();
+        #[cfg(test)]
+        if self.limit_override.load(Ordering::Relaxed) > 0 {
+            cgroup_limit = self.cgroup_limit();
+        }
         let limits = self.limits.effective(cgroup_limit);
-        let kernel = rss_of(std::process::id()).unwrap_or(0);
-        let claude = rss_of(self.claude_pid.load(Ordering::Relaxed)).unwrap_or(0);
         let service = kernel.saturating_add(claude);
-        let cgroup = cgroup_current().unwrap_or(0);
         let mut observed = if (cgroup_limit.is_some() || observe_cgroup()) && cgroup > 0 {
             service.max(cgroup)
         } else {
@@ -219,6 +233,10 @@ impl MemoryGuard {
         let override_rss = self.rss_override.load(Ordering::Relaxed);
         if override_rss > 0 {
             observed = override_rss;
+        } else if self.inflight_payload.load(Ordering::Relaxed) == 0
+            && self.pending.load(Ordering::Relaxed) == 0
+        {
+            self.idle_rss.store(observed, Ordering::Relaxed);
         }
         MemorySnapshot {
             kernel_rss_bytes: kernel,
@@ -236,6 +254,59 @@ impl MemoryGuard {
             pending: self.pending.load(Ordering::Relaxed),
             admission: classify(observed, &limits),
         }
+    }
+
+    /// `line_bytes` is the `job_start` frame. `body_bytes` is the request JSON
+    /// the CLI will parse and the SDK will send. One of each is the budget.
+    pub fn preflight(&self, line_bytes: usize, body_bytes: usize) -> Result<(), KernelError> {
+        let snap = self.snapshot();
+        let need = line_bytes.saturating_add(body_bytes) as u64;
+        let limit = snap.cgroup_limit_bytes.unwrap_or(4 * GIB);
+        let idle = self.idle_rss.load(Ordering::Relaxed).max(64 * MIB);
+        if need > limit.saturating_sub(idle) {
+            return Err(KernelError::BodyDoesNotFit);
+        }
+        if snap.observed_bytes.saturating_add(need) > snap.reject_bytes {
+            return Err(KernelError::Overloaded {
+                retry_after: Some("2".into()),
+            });
+        }
+        self.check_admission(line_bytes)
+    }
+
+    fn cached_os(&self) -> (u64, u64, u64, Option<u64>) {
+        if self.rss_override.load(Ordering::Relaxed) > 0 {
+            return self.read_os();
+        }
+        let mut cache = self.os_cache.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(sample) = cache.as_ref()
+            && sample.at.elapsed() < Duration::from_millis(100)
+        {
+            return (sample.kernel, sample.claude, sample.cgroup, sample.limit);
+        }
+        let read = self.read_os();
+        *cache = Some(OsSample {
+            at: Instant::now(),
+            kernel: read.0,
+            claude: read.1,
+            cgroup: read.2,
+            limit: read.3,
+        });
+        read
+    }
+
+    fn read_os(&self) -> (u64, u64, u64, Option<u64>) {
+        (
+            rss_of(std::process::id()).unwrap_or(0),
+            rss_of(self.claude_pid.load(Ordering::Relaxed)).unwrap_or(0),
+            cgroup_current().unwrap_or(0),
+            self.cgroup_limit(),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn set_idle_rss(&self, bytes: u64) {
+        self.idle_rss.store(bytes, Ordering::Relaxed);
     }
 
     fn check_admission(&self, request_bytes: usize) -> Result<(), KernelError> {
@@ -403,6 +474,30 @@ mod tests {
         let guard = MemoryGuard::new(MemoryLimits::production());
         guard.set_rss_override(4 * GIB);
         let err = guard.admit(128).unwrap_err();
+        assert!(matches!(err, KernelError::Overloaded { .. }));
+    }
+
+    #[test]
+    fn preflight_rejects_a_body_that_cannot_fit_when_idle() {
+        let guard = MemoryGuard::new(MemoryLimits::production());
+        guard.set_limit_override(512 * MIB);
+        guard.set_idle_rss(100 * MIB);
+        guard.set_rss_override(100 * MIB);
+        let err = guard
+            .preflight(300 * MIB as usize, 160 * MIB as usize)
+            .unwrap_err();
+        assert!(matches!(err, KernelError::BodyDoesNotFit));
+    }
+
+    #[test]
+    fn preflight_overloads_when_the_body_fits_but_the_watermark_does_not() {
+        let guard = MemoryGuard::new(MemoryLimits::production());
+        guard.set_limit_override(512 * MIB);
+        guard.set_idle_rss(100 * MIB);
+        guard.set_rss_override(400 * MIB);
+        let err = guard
+            .preflight(40 * MIB as usize, 40 * MIB as usize)
+            .unwrap_err();
         assert!(matches!(err, KernelError::Overloaded { .. }));
     }
 

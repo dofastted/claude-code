@@ -72,3 +72,20 @@ export function computeFingerprintFromMessages(
   const firstMessageText = extractFirstMessageText(messages)
   return computeFingerprint(firstMessageText, MACRO.VERSION)
 }
+
+/** First user text on a caller wire message, without building engine messages. */
+export function computeFingerprintFromWireMessages(messages: unknown): string {
+  if (!Array.isArray(messages)) return computeFingerprint('', MACRO.VERSION)
+  for (const message of messages) {
+    if (!message || typeof message !== 'object' || !('role' in message) || message.role !== 'user') continue
+    const content = 'content' in message ? message.content : undefined
+    if (typeof content === 'string') return computeFingerprint(content, MACRO.VERSION)
+    if (Array.isArray(content)) {
+      const text = content.find(
+        (block) => block && typeof block === 'object' && 'type' in block && block.type === 'text' && 'text' in block,
+      ) as { text?: unknown } | undefined
+      if (typeof text?.text === 'string') return computeFingerprint(text.text, MACRO.VERSION)
+    }
+  }
+  return computeFingerprint('', MACRO.VERSION)
+}

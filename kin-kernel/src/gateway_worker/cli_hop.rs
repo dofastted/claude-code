@@ -440,9 +440,23 @@ fn error_event(err: &KernelError) -> Vec<u8> {
 
 fn map_kernel(err: KernelError) -> WorkerError {
     match err {
-        KernelError::NoCapacity | KernelError::Overloaded { .. } => WorkerError::new(
+        KernelError::NoCapacity => WorkerError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "no_capacity",
+            err.to_string(),
+        ),
+        KernelError::Overloaded { retry_after } => {
+            let mut error = WorkerError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "overloaded",
+                "runtime overloaded",
+            );
+            error.retry_after = retry_after;
+            error
+        }
+        KernelError::BodyDoesNotFit => WorkerError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "invalid_request",
             err.to_string(),
         ),
         KernelError::InvalidRequest(_) => {

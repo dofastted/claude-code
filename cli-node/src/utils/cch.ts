@@ -8,6 +8,7 @@
  *   3. removes fallbacks, fallback_credit_token, and max_tokens digits
  * The compact body is sent without the SDK's stale Content-Length header.
  */
+
 export const CCH_SEED = 0x4d659218e32a3268n
 
 const U = (1n << 64n) - 1n
@@ -181,12 +182,7 @@ function setSystemCch(body: unknown, value: string): boolean {
     found = true
     const match = text.match(/^(\s*x-anthropic-billing-header:[^\r\n]*)(\r?\n|$)/i)
     if (!match) return text
-    let line = match[1]!.replace(/\bcc_entrypoint=[^;\s]*/i, 'cc_entrypoint=sdk-cli')
-    if (!/\bcc_entrypoint=/i.test(line)) {
-      const cchIndex = line.search(/\s*cch=/i)
-      if (cchIndex >= 0) line = `${line.slice(0, cchIndex)} cc_entrypoint=sdk-cli;${line.slice(cchIndex)}`
-      else line = `${line.trimEnd()}${line.trimEnd().endsWith(';') ? '' : ';'} cc_entrypoint=sdk-cli;`
-    }
+    let line = match[1]!
     let cchFound = false
     line = line.replace(/\s*cch=[^;\s]*;?/gi, () => {
       if (cchFound) return ''

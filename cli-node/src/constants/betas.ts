@@ -40,6 +40,8 @@ export const THINKING_BINDING_CONTROLS_BETA_HEADER =
   'thinking-binding-controls-2026-08-01'
 export const EXTENDED_CACHE_TTL_BETA_HEADER = 'extended-cache-ttl-2025-04-11'
 export const CACHE_DIAGNOSIS_BETA_HEADER = 'cache-diagnosis-2026-04-07'
+export const AUTO_MODE_CLASSIFIER_BETA_HEADER =
+  'auto-mode-classifier-2026-07-16'
 
 /**
  * Bedrock only supports a limited number of beta headers and only through

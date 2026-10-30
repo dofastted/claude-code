@@ -4,6 +4,7 @@
  * into Anthropic request headers.
  */
 import { officialCliVersion } from './cliVersion.js'
+import { readPanelCcEntrypoint } from './cacheTtl.js'
 import type * as Undici from 'undici'
 
 export const WRAP_OFFICIAL_STAINLESS = Object.freeze({
@@ -57,7 +58,7 @@ export type RequestClassContext = {
 }
 
 export function officialCliUserAgent(): string {
-  const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT || 'cli'
+  const entrypoint = readPanelCcEntrypoint()
   return `claude-cli/${officialCliVersion()} (external, ${entrypoint})`
 }
 
